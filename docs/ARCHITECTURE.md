@@ -29,17 +29,29 @@ A monolith is the deliberate starting point, not an oversight: microservices sol
 | Concern | Choice |
 |---|---|
 | Language / Runtime | Java 21 |
-| Framework | Spring Boot |
+| Framework | Spring Boot 4.1.0 |
 | Build tool | Maven |
 | Database | PostgreSQL |
 | Schema migrations | Flyway |
 | Auth | Spring Security + JWT |
 | Object mapping | MapStruct |
 | Boilerplate reduction | Lombok |
-| API docs | Swagger |
+| API docs | Swagger (springdoc-openapi 3.0.3) |
 | Testing | JUnit, Mockito |
 | Local infra | Docker, Docker Compose |
 | Frontend (future) | React |
+
+### Note on Spring Boot version (2026-07-05)
+
+Sprint 1 was originally scoped for Spring Boot 3.x. By the time the project was generated, Initializr's default had moved to **Spring Boot 4.1.0** — 3.x had become the trailing legacy line (latest patch `3.5.16`). We chose to generate on 4.1.0 rather than pin to legacy 3.x, since this project favors current industry practice over matching an already-stale plan.
+
+This carries real shape changes worth remembering when reading Boot-3-era tutorials/docs:
+
+- `spring-boot-starter-web` → **`spring-boot-starter-webmvc`** (Boot 4 splits the web starter explicitly between MVC and WebFlux).
+- The single `spring-boot-starter-test` is now **split per starter** (`spring-boot-starter-webmvc-test`, `spring-boot-starter-security-test`, etc.) rather than one bundle pulling in everything.
+- `springdoc-openapi` is pinned to **3.0.3** (the 2.x line targets Spring Framework 6 / Boot 3; 3.x targets Spring Framework 7 / Boot 4). It has never been an Initializr-catalog dependency in either line and is added to `pom.xml` by hand.
+
+Going forward: if a tech decision changes mid-implementation because a better/newer option surfaces, update this file and the active sprint file immediately rather than waiting for sprint close — these docs should never lag behind what's actually running.
 
 ### Reasons for choosing PostgreSQL
 

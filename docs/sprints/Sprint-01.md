@@ -21,15 +21,17 @@ created. No business logic. No REST APIs. No authentication.
 
 **Out of scope:** JWT auth, QR generation, REST endpoints, business logic, Flyway migrations (deferred to post-LLD).
 
+**Note (2026-07-05):** At generation time, Spring Initializr's default had moved to Spring Boot 4.1.0 (3.x is now the trailing legacy line, latest patch 3.5.16). Decided to generate on 4.1.0 rather than pin to the now-legacy 3.x — see `docs/ARCHITECTURE.md` for the resulting stack changes (starter renames, per-starter test artifacts, springdoc version). Tech decisions may continue to shift during implementation as newer/better options surface; when that happens, update this file and `ARCHITECTURE.md` immediately rather than waiting for sprint close.
+
 ---
 
 ## Tasks
 
 ### Setup
-- [ ] S1-01 — Generate Spring Boot project: Java 21, Maven, Spring Boot 3.x
-- [ ] S1-02 — Add dependencies: `spring-boot-starter-web`, `spring-boot-starter-data-jpa`, `postgresql`, `spring-boot-starter-security`, `lombok`, `spring-boot-starter-validation`, `springdoc-openapi-starter-webmvc-ui`
-- [ ] S1-03 — Verify clean build: `mvn clean install`
-- [ ] S1-04 — Push to GitHub — repo: `buslink-backend`
+- [x] S1-01 — Generate Spring Boot project: Java 21, Maven, Spring Boot 4.1.0 (bumped from planned 3.x — see note below)
+- [x] S1-02 — Add dependencies: `spring-boot-starter-webmvc` (renamed from `spring-boot-starter-web` in Boot 4), `spring-boot-starter-data-jpa`, `postgresql`, `spring-boot-starter-security`, `lombok`, `spring-boot-starter-validation`, `springdoc-openapi-starter-webmvc-ui:3.0.3`
+- [x] S1-03 — Verify clean build: `./mvnw clean install` — passed, jar produced at `target/buslink-backend-0.0.1-SNAPSHOT.jar`
+- [ ] S1-04 — Push to GitHub — repo: `buslink` (renamed from planned `buslink-backend`; the git root is the project root, not `backend/`, so the repo holds docs/, infrastructure/, and backend/ together as one monorepo)
 - [ ] S1-05 — Define branch strategy: `main` → `dev` → `feature/*`
 
 ### Package Structure

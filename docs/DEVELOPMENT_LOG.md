@@ -40,4 +40,17 @@ Completed
 
 Next
 
-- Generate Spring Boot project.
+- ~~Generate Spring Boot project.~~ Done — see below.
+
+## Spring Boot Project Generation
+
+Completed
+
+- Generated Spring Boot project via Initializr into `backend/` (Java 21, Maven, group `com.buslink`, artifact `buslink-backend`)
+- Bumped target framework version from planned Spring Boot 3.x to **4.1.0** — 3.x had become the trailing legacy line by generation time; see `docs/ARCHITECTURE.md` for full rationale and resulting stack changes (starter renames, springdoc 3.0.3)
+- Added Sprint 1 dependencies: `spring-boot-starter-webmvc`, `spring-boot-starter-data-jpa`, `postgresql`, `spring-boot-starter-security`, `lombok`, `spring-boot-starter-validation`, `springdoc-openapi-starter-webmvc-ui:3.0.3`
+- Verified clean build: `./mvnw clean install` succeeded, jar produced
+
+Next
+
+- Push `backend/` to GitHub (`buslink-backend` repo), define branch strategy (S1-04, S1-05).
