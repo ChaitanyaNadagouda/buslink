@@ -1,0 +1,16 @@
+# Environment secrets
+infrastructure/.env
+
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store
+
+# Java / Maven (backend will add more later)
+target/
+*.class
+
+# Logs
+*.log
