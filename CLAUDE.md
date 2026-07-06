@@ -92,7 +92,7 @@ Use Layered Architecture.
 - controller
 - service
 - repository
-- model
+- entity
 - dto
 - mapper
 - config

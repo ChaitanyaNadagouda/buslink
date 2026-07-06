@@ -31,11 +31,11 @@ created. No business logic. No REST APIs. No authentication.
 - [x] S1-01 — Generate Spring Boot project: Java 21, Maven, Spring Boot 4.1.0 (bumped from planned 3.x — see note below)
 - [x] S1-02 — Add dependencies: `spring-boot-starter-webmvc` (renamed from `spring-boot-starter-web` in Boot 4), `spring-boot-starter-data-jpa`, `postgresql`, `spring-boot-starter-security`, `lombok`, `spring-boot-starter-validation`, `springdoc-openapi-starter-webmvc-ui:3.0.3`
 - [x] S1-03 — Verify clean build: `./mvnw clean install` — passed, jar produced at `target/buslink-backend-0.0.1-SNAPSHOT.jar`
-- [ ] S1-04 — Push to GitHub — repo: `buslink` (renamed from planned `buslink-backend`; the git root is the project root, not `backend/`, so the repo holds docs/, infrastructure/, and backend/ together as one monorepo)
-- [ ] S1-05 — Define branch strategy: `main` → `dev` → `feature/*`
+- [x] S1-04 — Push to GitHub — repo: `buslink` (renamed from planned `buslink-backend`; the git root is the project root, not `backend/`, so the repo holds docs/, infrastructure/, and backend/ together as one monorepo)
+- [x] S1-05 — Define branch strategy: `main` → `dev` → `feature/*`
 
 ### Package Structure
-- [ ] S1-06 — Scaffold flat top-level packages under `com.buslink`:
+- [x] S1-06 — Scaffold flat top-level packages under `com.buslink`:
   ```
   controller/
   service/
@@ -58,9 +58,9 @@ created. No business logic. No REST APIs. No authentication.
   ```
 
 ### Configuration
-- [ ] S1-07 — Create `application.yml` and `application-dev.yml` with dev profile
-- [ ] S1-08 — PostgreSQL already running via Docker Compose — create `buslink_db` database in pgAdmin
-- [ ] S1-09 — Configure datasource in `application-dev.yml`, verify DB connection on startup
+- [x] S1-07 — Decided to keep the existing flat `application.properties` (no Spring Profiles) — simpler while learning, with only one environment (local dev) in play; revisit profiles when a second environment (staging/prod) actually exists
+- [x] S1-08 — PostgreSQL already running via Docker Compose — database already exists as `buslink` (auto-created from `POSTGRES_DB` in `infrastructure/.env`); no separate `buslink_db` needed, so this task is satisfied as-is rather than creating a duplicate
+- [x] S1-09 — Configure datasource in `application.properties` (`${POSTGRES_DB}`/`${POSTGRES_USER}`/`${POSTGRES_PASSWORD}` placeholders sourced from `infrastructure/.env`); verified — app starts clean, HikariCP connects to `jdbc:postgresql://localhost:5432/buslink`
 
 ### Entities
 - [ ] S1-10 — `User.java` in `entity/` — fields: `userId` (UUID), `name`, `email`, `passwordHash`, `qrToken`, `deviceId`, `status`, `createdAt`

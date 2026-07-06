@@ -56,7 +56,7 @@ Docker Compose.
 
 Per `docs/sprints/Sprint-01.md` (the active sprint file — source of truth for scope): generate the Spring Boot project, scaffold the flat package structure, create all JPA entities, connect to PostgreSQL, and verify the app starts with all tables created. No business logic, REST APIs, auth, or Flyway (Flyway is explicitly deferred to post-LLD).
 
-S1-01, S1-02, S1-03 complete. Remaining: S1-04 through S1-30.
+S1-01 through S1-09 complete. Remaining: S1-10 through S1-30.
 
 ## Notes
 
@@ -64,4 +64,4 @@ S1-01, S1-02, S1-03 complete. Remaining: S1-04 through S1-30.
 - No entities have been created.
 - No REST APIs have been developed.
 - No authentication exists yet.
-- `backend/` is currently untracked in git — not yet pushed to GitHub (S1-04 pending).
+- `backend/` is committed and pushed to GitHub (`buslink` repo, `feature/project-setup` branch); branch strategy (`main` → `dev` → `feature/*`) is in place.
