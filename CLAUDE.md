@@ -127,3 +127,4 @@ Whenever architecture changes significantly, remind me to update:
 - **docs/ARCHITECTURE.md** — high-level design decisions.
 - **docs/API.md** — API documentation and notes.
 - **docs/DEVELOPMENT_LOG.md** — history of completed work and milestones.
+- **docs/INTERVIEW_PREP.md** — interview Q&A notes on non-obvious engineering decisions (the *why*, not just the *what*). Update whenever a new non-trivial design decision gets made — same trigger as the other docs above.
