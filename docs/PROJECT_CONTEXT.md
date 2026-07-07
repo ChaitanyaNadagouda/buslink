@@ -56,12 +56,13 @@ Docker Compose.
 
 Per `docs/sprints/Sprint-01.md` (the active sprint file — source of truth for scope): generate the Spring Boot project, scaffold the flat package structure, create all JPA entities, connect to PostgreSQL, and verify the app starts with all tables created. No business logic, REST APIs, auth, or Flyway (Flyway is explicitly deferred to post-LLD).
 
-S1-01 through S1-09 complete. Remaining: S1-10 through S1-30.
+S1-01 through S1-27 complete, plus S1-31 (added mid-sprint: `Payment` entity). Remaining: S1-30 (README). S1-28/S1-29 (repository + service stub) moved to Sprint 2 (2026-07-07, approved) — repository/service work will be built together there as one coherent unit instead of a stub now.
 
 ## Notes
 
 - No business logic has been implemented yet.
-- No entities have been created.
+- All 9 entities created and verified in Postgres: `User`, `Wallet`, `Transaction`, `Payment`, `Route`, `Bus`, `Conductor`, `Ticket`, `SyncEvent` — tables confirmed via Hibernate DDL log, app starts clean, `ddl-auto=update`.
 - No REST APIs have been developed.
-- No authentication exists yet.
-- `backend/` is committed and pushed to GitHub (`buslink` repo, `feature/project-setup` branch); branch strategy (`main` → `dev` → `feature/*`) is in place.
+- No authentication exists yet — `SecurityConfig` is a permit-all stub (JWT is out of scope for Sprint 1).
+- Swagger UI verified working (credential-free) at `/swagger-ui/index.html`.
+- `backend/` is committed and pushed to GitHub (`buslink` repo, `feature/project-setup` branch); branch strategy (`main` → `dev` → `feature/*`) is in place. Latest work (S1-06 onward) not yet committed — pending.

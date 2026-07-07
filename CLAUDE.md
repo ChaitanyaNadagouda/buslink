@@ -93,6 +93,7 @@ Use Layered Architecture.
 - service
 - repository
 - entity
+- enums
 - dto
 - mapper
 - config
