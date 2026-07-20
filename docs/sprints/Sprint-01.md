@@ -121,7 +121,7 @@ created. No business logic. No REST APIs. No authentication.
 ## Definition of Done
 
 - [x] Spring Boot application starts with zero errors — verified repeatedly (S1-18, S1-26, S1-27)
-- [ ] All 9 tables visible in pgAdmin: `users` (renamed from `user` — reserved keyword in PostgreSQL), `wallet`, `transaction`, `payment` (added mid-sprint, S1-31), `route`, `bus`, `conductor`, `ticket`, `sync_event` — **left unchecked**: verified via Hibernate's DDL log (S1-18), not by looking at pgAdmin's UI itself; check this off once visually confirmed there
+- [x] All 9 tables visible in pgAdmin: `users` (renamed from `user` — reserved keyword in PostgreSQL), `wallet`, `transaction`, `payment` (added mid-sprint, S1-31), `route`, `bus`, `conductor`, `ticket`, `sync_event` — visually confirmed in pgAdmin UI (2026-07-08), in addition to the earlier Hibernate DDL log check (S1-18)
 - [x] Swagger UI accessible at `/swagger-ui/index.html` — verified credential-free (S1-22, S1-26)
 - [x] Flat package structure committed and matches the scaffold in S1-06 — committed `ae3d60e`, merged to `dev`
 - [x] All entities in `entity/`, committed with correct JPA annotations (repositories moved to Sprint 2, see S1-28/S1-29 note) — committed `ae3d60e`, merged to `dev`
