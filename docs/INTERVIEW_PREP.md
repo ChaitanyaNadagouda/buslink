@@ -117,3 +117,43 @@ A: When a conductor's device creates a `Ticket` offline, something needs to trac
 
 **Q: Why does `SyncEntityType` only have one value (`TICKET`)?**
 A: `Transaction` and `Payment` are inherently online-only operations — a wallet debit needs to check the live balance server-side (what `@Version` protects), and a UPI/card payment needs to reach an external gateway over the network. Neither can be created in an offline state that would need syncing later. `Ticket` is the only entity actually created offline. A single-value enum still earns its keep over a raw `String` (compile-time safety, documents intent) and costs nothing to extend if a future offline-creatable entity appears.
+
+---
+
+## Sprint 2
+
+### Security
+
+**Q: Why does `JwtUtil` embed a `"type"` claim (`access`/`refresh`) in every token instead of just using expiry to tell them apart?**
+A: Without it, a leaked long-lived refresh token (7-day expiry) could be sent directly as a Bearer access token against any protected endpoint — it would pass signature and expiry checks just fine, defeating the entire point of having a short-lived access token. `JwtAuthenticationFilter` checks `isRefreshToken()` and rejects the request outright if a refresh token is used where an access token belongs. This was actually a bug found *after* the filter was first written (S2-04), then fixed as an amendment once the gap was noticed while building `refreshToken()` (S2-14) — a good example of a security property that isn't obvious until you think adversarially about what a stolen token can be used for.
+
+**Q: Why does `UserDetailsServiceImpl.loadUserByUsername()` throw `UsernameNotFoundException` instead of the project's own `ResourceNotFoundException`?**
+A: Spring Security's `DaoAuthenticationProvider` specifically catches `UsernameNotFoundException` and translates it into a generic authentication failure — throwing a different exception type would bypass that translation and risk leaking "this email doesn't exist" as a distinguishable error from "wrong password," enabling user enumeration.
+
+**Q: Why does `login()` return the same generic error for "email not found" and "wrong password," when the original design called for a distinguishable 404 on a missing email?**
+A: Returning different status codes for the two cases lets an attacker enumerate registered emails by testing `/auth/login` with guessed addresses and watching which ones 404 vs 400 — the exact risk `UsernameNotFoundException` handling was already written to avoid elsewhere. Since this is a hand-rolled flow (`AuthServiceImpl.login()` calls `passwordEncoder.matches()` directly, not routed through `DaoAuthenticationProvider`), that protection isn't automatically inherited and had to be applied deliberately here too. Both cases now throw the same `ValidationException("Invalid email or password")` (400).
+
+**Q: Why is `UserPrincipal` a separate adapter class instead of making `User` implement `UserDetails` directly?**
+A: Keeps Spring Security framework types out of the `entity/` package, consistent with every other entity staying framework-agnostic. The adapter wraps a `User` and grants a fixed `ROLE_PASSENGER` authority (every row in `User` is a rider; `Conductor` will be a separate entity/auth path in Sprint 3).
+
+**Q: Unauthenticated requests to a protected endpoint returned `403` instead of the expected `401` — what was actually wrong, and why?**
+A: Spring Security's `ExceptionTranslationFilter` needs something to call when authentication is missing — an `AuthenticationEntryPoint`. With no `httpBasic()`/`formLogin()` enabled (correct for a stateless JWT API) and no custom entry point configured, it silently fell back to `Http403ForbiddenEntryPoint`. `401 Unauthorized` ("who are you") and `403 Forbidden` ("I know who you are, but no") are semantically different outcomes, and the missing-credential case is unambiguously the former. Fixed by adding `JwtAuthenticationEntryPoint` (implements `AuthenticationEntryPoint`) and wiring it via `.exceptionHandling(ex -> ex.authenticationEntryPoint(...))`.
+
+**Q: Duplicate-email registration returned `400` instead of `409` — what was the actual bug?**
+A: `AuthServiceImpl.register()`'s duplicate-email check threw `ValidationException`, and `GlobalExceptionHandler` unconditionally maps that type to `400`. But "this resource already exists" is a conflict with existing server state (409), not a malformed request (400) — those are different HTTP semantics even though both are "4xx client error." Fixed by adding a dedicated `ConflictException` → `409` mapping, used only for this case; `login()`/`refreshToken()` keep `ValidationException`/400 since those genuinely are bad requests.
+
+### Boot 4 / Framework Gotchas
+
+**Q: Constructor-injecting `com.fasterxml.jackson.databind.ObjectMapper` compiled fine but failed at startup with "no bean of that type" — why?**
+A: Spring Boot 4.1's default JSON engine is **Jackson 3**, under a new Maven groupId/package (`tools.jackson.databind.ObjectMapper`). `spring-boot-starter-jackson` only autoconfigures a bean of that new type. The classic Jackson 2 classes (`com.fasterxml.jackson.*`) were still resolvable at compile time because `jjwt-jackson` pulls them in transitively for jjwt's own internal claim serialization — but that's never a Spring-managed bean. A class being on the classpath and a class having a Spring bean are two different questions; this is the case where they silently diverged. Fix: inject `tools.jackson.databind.ObjectMapper` instead.
+
+**Q: Where did `UsernamePasswordAuthenticationFilter` move, and why does it matter?**
+A: Spring Security 7.x (paired with Boot 4.1.0) moved it from `org.springframework.security.authentication` to `org.springframework.security.web.authentication`. Any Boot-3-era Spring Security tutorial/snippet using the old import fails to compile as-is — caught immediately via `./mvnw compile`, not a runtime surprise.
+
+### Testing Strategy
+
+**Q: Why is `AuthServiceImplTest` a plain Mockito unit test (`@Mock`/`@InjectMocks`, no Spring context) instead of `@SpringBootTest` + `@MockBean`?**
+A: Nothing under test needs Spring wiring — `AuthServiceImpl`'s logic (uniqueness check, password hashing, status check) is pure business logic sitting behind an interface boundary to its four collaborators (`UserRepository`, `WalletRepository`, `PasswordEncoder`, `JwtUtil`). Booting a full Spring context to test that logic would be slower for no correctness benefit, and this environment has no DB/Docker connectivity to back a real context anyway. Same reasoning already applied to `JwtUtilTest` in Sprint 1/2 — extended here to mocking real collaborators, since unlike `JwtUtil`, `AuthServiceImpl` actually has dependencies that need stubbing rather than avoiding.
+
+**Q: How do you unit-test a method that calls `repository.save()` and then reads the ID Hibernate would generate, without a real database?**
+A: Stub `save()` with Mockito's `thenAnswer` to mutate and return the same entity instance passed in — `invocation.getArgument(0)` — setting a fixed UUID on it before returning. This mirrors real Hibernate behavior for `GenerationType.UUID` specifically: the ID is generated client-side and assigned onto the entity *before* the insert, not populated afterward the way an auto-increment `IDENTITY` strategy would be. A test double should match the real timing semantics it's standing in for, not just return *some* value.
