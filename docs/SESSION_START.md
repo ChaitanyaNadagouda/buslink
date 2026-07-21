@@ -69,9 +69,12 @@ When all tasks in the active sprint are complete:
 
 1. Announce sprint completion.
 2. Summarize what was accomplished.
-3. Ask me to finalize the sprint in Notion.
-4. Ask me to prepare the next sprint plan.
-5. Generate the next sprint file after I approve the plan.
-6. Update DEVELOPMENT_ROADMAP.md with the new active sprint.
-7. Wait for my approval before beginning the next sprint.
+3. Merge `dev` into `main` and push `main`, so `main` and `dev` stay in sync at
+   every sprint boundary (confirm with me before pushing `main`, same as any
+   shared-state push).
+4. Ask me to finalize the sprint in Notion.
+5. Ask me to prepare the next sprint plan.
+6. Generate the next sprint file after I approve the plan.
+7. Update DEVELOPMENT_ROADMAP.md with the new active sprint.
+8. Wait for my approval before beginning the next sprint.
 

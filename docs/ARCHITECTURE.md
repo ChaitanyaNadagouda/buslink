@@ -29,17 +29,31 @@ A monolith is the deliberate starting point, not an oversight: microservices sol
 | Concern | Choice |
 |---|---|
 | Language / Runtime | Java 21 |
-| Framework | Spring Boot |
+| Framework | Spring Boot 4.1.0 |
 | Build tool | Maven |
 | Database | PostgreSQL |
 | Schema migrations | Flyway |
 | Auth | Spring Security + JWT |
 | Object mapping | MapStruct |
 | Boilerplate reduction | Lombok |
-| API docs | Swagger |
+| API docs | Swagger (springdoc-openapi 3.0.3) |
 | Testing | JUnit, Mockito |
 | Local infra | Docker, Docker Compose |
 | Frontend (future) | React |
+
+### Note on Spring Boot version (2026-07-05)
+
+Sprint 1 was originally scoped for Spring Boot 3.x. By the time the project was generated, Initializr's default had moved to **Spring Boot 4.1.0** — 3.x had become the trailing legacy line (latest patch `3.5.16`). We chose to generate on 4.1.0 rather than pin to legacy 3.x, since this project favors current industry practice over matching an already-stale plan.
+
+This carries real shape changes worth remembering when reading Boot-3-era tutorials/docs:
+
+- `spring-boot-starter-web` → **`spring-boot-starter-webmvc`** (Boot 4 splits the web starter explicitly between MVC and WebFlux).
+- The single `spring-boot-starter-test` is now **split per starter** (`spring-boot-starter-webmvc-test`, `spring-boot-starter-security-test`, etc.) rather than one bundle pulling in everything.
+- `springdoc-openapi` is pinned to **3.0.3** (the 2.x line targets Spring Framework 6 / Boot 3; 3.x targets Spring Framework 7 / Boot 4). It has never been an Initializr-catalog dependency in either line and is added to `pom.xml` by hand.
+- Spring Security 7.x (paired with Boot 4.1.0) moved `UsernamePasswordAuthenticationFilter` from `org.springframework.security.authentication` to **`org.springframework.security.web.authentication`** — Boot-3-era Spring Security tutorials/snippets will have the old import and fail to compile as-is (hit during Sprint 2, S2-05).
+- Boot 4.1's default JSON engine is **Jackson 3**, under a new Maven groupId/package: `tools.jackson.databind.ObjectMapper`, not the classic `com.fasterxml.jackson.databind.ObjectMapper` (Jackson 2). `spring-boot-starter-jackson` (pulled in by `spring-boot-starter-webmvc`) only autoconfigures a bean of the new Jackson 3 type. Classic Jackson 2 classes can still be on the classpath via unrelated dependencies (here, `jjwt-jackson` pulls it in for jjwt's own internal claim serialization) without ever being Spring-managed — constructor-injecting `com.fasterxml.jackson.databind.ObjectMapper` fails at startup with "no bean of that type" even though the class resolves fine at compile time. Hit during Sprint 2 while building `JwtAuthenticationEntryPoint` (S2-22 verification pass).
+
+Going forward: if a tech decision changes mid-implementation because a better/newer option surfaces, update this file and the active sprint file immediately rather than waiting for sprint close — these docs should never lag behind what's actually running.
 
 ### Reasons for choosing PostgreSQL
 
@@ -116,9 +130,9 @@ Everything above runs locally via Docker Compose. The Spring Boot application bo
 
 The following are anticipated additions, roughly in the order the domain requires them. Each will get its own architectural decision (problem → alternatives → chosen approach) when its sprint begins, not designed in detail upfront.
 
-- **Authentication** — Spring Security + JWT for stateless API auth; likely role-based (rider vs. admin) from the start given the Admin Portal below.
-- **Ticketing** — the core domain: routes, trips, fares, ticket issuance and lifecycle (issued → validated → expired).
-- **Payments** — integration with a payment gateway; will need idempotency handling so a network retry can't double-charge or double-issue a ticket.
+- **Authentication** — Spring Security + JWT for stateless API auth; likely role-based (rider vs. admin) from the start given the Admin Portal below. **Update (2026-07-08):** a second login method — mobile number + OTP — is planned alongside email/password, for riders who prefer it over remembering a password. `User.mobileNo` (Sprint 1, S1-10) was already added unique specifically to support this later. Sprint 2's email/password flow (`UserDetailsServiceImpl.loadUserByUsername(email)`, login/register DTOs) is built as one specific auth method, not the only one the system will ever support — OTP login is a parallel lookup/flow (by `mobileNo` instead of `email`) and a new endpoint/DTO, added in a future sprint once OTP delivery (SMS gateway) is in scope. No Sprint 2 rework anticipated; `JwtUtil` issues tokens off a `User`, independent of how they authenticated.
+- **Ticketing** — the core domain: routes, trips, fares, ticket issuance and lifecycle (issued → validated → expired). **Update (2026-07-06):** the fare service will need the real stop topology of a route (an ordered sequence of stops, each at a known stage/position) to compute a fare between any two stops a conductor selects. `Route` (Sprint 1, S1-13) deliberately only stores `originStop`/`destinationStop` for now — no stop-sequence modeling exists yet. This is scoped to whenever the Fare Service sprint begins, not designed upfront.
+- **Payments** — integration with a payment gateway; will need idempotency handling so a network retry can't double-charge or double-issue a ticket. **Update (2026-07-06):** the `Payment` entity's shape was created early, in Sprint 1 (`docs/sprints/Sprint-01.md`, S1-31), once wallet top-up and direct non-wallet fare payment (UPI/card) both needed representing. Only the persistent shape exists — no gateway integration, webhook handling, or idempotency logic yet; that remains future work as described here.
 - **QR validation** — generating a verifiable QR per ticket and a fast validation endpoint for bus-side scanning; likely the first candidate for extraction into its own service if load/latency demands independent scaling.
 - **Analytics** — reporting on ridership, revenue, and route usage; likely read-heavy and may eventually warrant a read replica or separate reporting store rather than querying the transactional database directly.
 - **Notifications** — ticket confirmations, trip reminders; async by nature (likely a message queue rather than synchronous calls from the ticketing flow).
