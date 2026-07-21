@@ -125,35 +125,122 @@ A: `Transaction` and `Payment` are inherently online-only operations — a walle
 ### Security
 
 **Q: Why does `JwtUtil` embed a `"type"` claim (`access`/`refresh`) in every token instead of just using expiry to tell them apart?**
-A: Without it, a leaked long-lived refresh token (7-day expiry) could be sent directly as a Bearer access token against any protected endpoint — it would pass signature and expiry checks just fine, defeating the entire point of having a short-lived access token. `JwtAuthenticationFilter` checks `isRefreshToken()` and rejects the request outright if a refresh token is used where an access token belongs. This was actually a bug found *after* the filter was first written (S2-04), then fixed as an amendment once the gap was noticed while building `refreshToken()` (S2-14) — a good example of a security property that isn't obvious until you think adversarially about what a stolen token can be used for.
+A: Without it, a leaked long-lived refresh token (7-day expiry) could be sent directly as a Bearer access token against any protected endpoint — it would pass signature and expiry checks just fine, defeating the point of a short-lived access token. `JwtAuthenticationFilter` checks `isRefreshToken()` and rejects the request outright if a refresh token is used where an access token belongs. Found *after* the filter was first written (S2-04), fixed once the gap was noticed while building `refreshToken()` (S2-14) — a security property that isn't obvious until you think adversarially about what a stolen token can be used for.
 
-**Q: Why does `UserDetailsServiceImpl.loadUserByUsername()` throw `UsernameNotFoundException` instead of the project's own `ResourceNotFoundException`?**
-A: Spring Security's `DaoAuthenticationProvider` specifically catches `UsernameNotFoundException` and translates it into a generic authentication failure — throwing a different exception type would bypass that translation and risk leaking "this email doesn't exist" as a distinguishable error from "wrong password," enabling user enumeration.
-
-**Q: Why does `login()` return the same generic error for "email not found" and "wrong password," when the original design called for a distinguishable 404 on a missing email?**
-A: Returning different status codes for the two cases lets an attacker enumerate registered emails by testing `/auth/login` with guessed addresses and watching which ones 404 vs 400 — the exact risk `UsernameNotFoundException` handling was already written to avoid elsewhere. Since this is a hand-rolled flow (`AuthServiceImpl.login()` calls `passwordEncoder.matches()` directly, not routed through `DaoAuthenticationProvider`), that protection isn't automatically inherited and had to be applied deliberately here too. Both cases now throw the same `ValidationException("Invalid email or password")` (400).
+**Q: Why does `login()` — and `UserDetailsServiceImpl.loadUserByUsername()` — deliberately avoid revealing whether a failure was "email not found" vs "wrong password"?**
+A: Distinguishable errors (e.g. 404 for a missing email, 400 for a wrong password) let an attacker enumerate registered emails by testing `/auth/login` with guessed addresses. Two places guard against this independently: `loadUserByUsername()` throws Spring Security's own `UsernameNotFoundException` (which `DaoAuthenticationProvider` translates into a generic auth failure — the project's own `ResourceNotFoundException` wouldn't get that translation), and `AuthServiceImpl.login()` — a hand-rolled flow calling `passwordEncoder.matches()` directly, so it doesn't inherit that protection automatically — throws the same `ValidationException("Invalid email or password")` (400) for both cases.
 
 **Q: Why is `UserPrincipal` a separate adapter class instead of making `User` implement `UserDetails` directly?**
 A: Keeps Spring Security framework types out of the `entity/` package, consistent with every other entity staying framework-agnostic. The adapter wraps a `User` and grants a fixed `ROLE_PASSENGER` authority (every row in `User` is a rider; `Conductor` will be a separate entity/auth path in Sprint 3).
 
-**Q: Unauthenticated requests to a protected endpoint returned `403` instead of the expected `401` — what was actually wrong, and why?**
-A: Spring Security's `ExceptionTranslationFilter` needs something to call when authentication is missing — an `AuthenticationEntryPoint`. With no `httpBasic()`/`formLogin()` enabled (correct for a stateless JWT API) and no custom entry point configured, it silently fell back to `Http403ForbiddenEntryPoint`. `401 Unauthorized` ("who are you") and `403 Forbidden` ("I know who you are, but no") are semantically different outcomes, and the missing-credential case is unambiguously the former. Fixed by adding `JwtAuthenticationEntryPoint` (implements `AuthenticationEntryPoint`) and wiring it via `.exceptionHandling(ex -> ex.authenticationEntryPoint(...))`.
+**Q: Unauthenticated requests to a protected endpoint returned `403` instead of the expected `401` — what was actually wrong?**
+A: `ExceptionTranslationFilter` needs an `AuthenticationEntryPoint` to call when authentication is missing. With no `httpBasic()`/`formLogin()` enabled (correct for a stateless JWT API) and no custom entry point configured, it silently fell back to `Http403ForbiddenEntryPoint`. `401` ("who are you") and `403` ("I know who you are, but no") are semantically different, and a missing credential is unambiguously the former. Fixed by adding `JwtAuthenticationEntryPoint` and wiring it via `.exceptionHandling(ex -> ex.authenticationEntryPoint(...))`.
 
 **Q: Duplicate-email registration returned `400` instead of `409` — what was the actual bug?**
-A: `AuthServiceImpl.register()`'s duplicate-email check threw `ValidationException`, and `GlobalExceptionHandler` unconditionally maps that type to `400`. But "this resource already exists" is a conflict with existing server state (409), not a malformed request (400) — those are different HTTP semantics even though both are "4xx client error." Fixed by adding a dedicated `ConflictException` → `409` mapping, used only for this case; `login()`/`refreshToken()` keep `ValidationException`/400 since those genuinely are bad requests.
+A: `AuthServiceImpl.register()`'s duplicate-email check threw `ValidationException`, which `GlobalExceptionHandler` unconditionally maps to `400`. But "this resource already exists" is a conflict with existing server state (409), not a malformed request (400). Fixed by adding a dedicated `ConflictException` → `409` mapping, used only for this case; `login()`/`refreshToken()` keep `ValidationException`/400 since those genuinely are bad requests.
+
+### JWT Fundamentals
+
+**Q: What are the three parts of a JWT, and what does each one actually do?**
+A: `header.payload.signature`, base64url-encoded and dot-separated.
+
+```
+ eyJhbGciOiJIUzI1NiJ9 . eyJzdWIiOiJhQGIuY29tIn0 . 5mZ2f9K...
+ └─────────┬──────────┘   └──────────┬──────────┘   └───┬───┘
+        HEADER                    PAYLOAD            SIGNATURE
+    {"alg":"HS256",          claims: sub (email),   HMAC(header+payload, secret)
+     "typ":"JWT"}            iat, exp, "type"        proves it wasn't tampered
+                                                       with — NOT that it's secret
+```
+
+Base64 is an *encoding*, not encryption — anyone can decode the payload. The signature only guarantees integrity, which is why no secrets ever go in the claims, only the email as subject.
+
+**Q: Why issue two tokens (access + refresh) instead of one?**
+A: Splits a trade-off. One long-lived token means fewer re-logins, but a stolen token stays dangerous for its whole lifetime. The **access token** is short-lived and does the real work (sent on every request, most exposed to interception) — if stolen, its usefulness expires fast. The **refresh token** is long-lived but rarely transmitted (only to get a new access token), so its bigger blast radius is offset by a much smaller exposure surface.
+
+```
+ LOGIN → issue accessToken (short) + refreshToken (long)
+   │
+   ▼
+ client sends accessToken on every request ──► eventually expires
+                                                     │
+                                                     ▼
+                                     POST /auth/refresh with refreshToken
+                                                     │
+                                                     ▼
+                                     server validates it, issues a new
+                                     accessToken (loop until refreshToken
+                                     itself expires → full re-login)
+```
+
+### Spring Security Filter Chain Fundamentals
+
+**Q: Step by step, what happens when a request hits a protected endpoint like `GET /user/profile`?**
+A:
+
+```
+ HTTP Request
+     │
+     ▼
+ JwtAuthenticationFilter          ← custom, registered BEFORE
+  - reads Authorization header      UsernamePasswordAuthenticationFilter
+  - validates the JWT
+  - populates SecurityContext
+     │
+     ▼
+ ExceptionTranslationFilter       ← catches Authentication/AccessDenied
+     │                              exceptions thrown further down
+     ▼
+ AuthorizationFilter              ← evaluates authorizeHttpRequests()
+     │
+     ▼
+ unauthenticated + auth required? ──yes──► JwtAuthenticationEntryPoint
+     │no                                    .commence() → 401 JSON body
+     ▼
+ DispatcherServlet → Controller
+```
+
+**Q: What's the practical difference between authentication and authorization here, and where does each happen?**
+A: Authentication = "who is this" — proven per request by `JwtAuthenticationFilter`, which populates `SecurityContextHolder` with a `UserPrincipal`. Authorization = "are they allowed to do this" — decided declaratively in `SecurityConfig.authorizeHttpRequests()`. Today that's binary (`permitAll()` vs `authenticated()`) since every `User` only ever carries `ROLE_PASSENGER` — the role-based machinery (`GrantedAuthority`, `hasRole()`) is wired but won't really be exercised until Sprint 3's conductor auth adds a second role. Also worth knowing: under `SessionCreationPolicy.STATELESS`, none of this is persisted in an `HttpSession` — the JWT re-proves identity from scratch on every request.
+
+### Password Security Fundamentals
+
+**Q: Why hash passwords with BCrypt instead of encrypting them, or using a fast hash like SHA-256?**
+A: Encryption is reversible — a compromised key means every password is recoverable, and login never needs plaintext back, only "does this match." A fast hash like SHA-256 is built for data-integrity checks, not secrecy — its speed lets an attacker brute-force billions of candidates/sec against a leaked hash. BCrypt is deliberately slow and tunable (exponential cost factor, library default 10) with salting built in, so brute-forcing stays expensive even at scale, and identical passwords never produce identical stored hashes.
+
+**Q: How does `BCryptPasswordEncoder.matches()` verify a password without ever storing the plaintext?**
+A: A BCrypt hash embeds its own random salt in the stored string itself (`$2a$10$<salt><hash>`). `matches(raw, encoded)` extracts that salt, re-runs BCrypt on the candidate password with it, and compares the two resulting hashes.
+
+```
+ REGISTER: hash(pw, freshRandomSalt) → store "$2a$10$saltHASH..."
+ LOGIN:    read salt out of the STORED hash → hash(candidate, thatSalt)
+           → compare to stored hash → match / no match
+```
+
+### HTTP Status Code Semantics
+
+**Q: When should an endpoint return 400 vs 401 vs 403 vs 409 — and where does each show up in BusLink?**
+A:
+
+| Code | Meaning | Where it happens in BusLink |
+|---|---|---|
+| 400 Bad Request | Malformed request or failed business-rule check | `ValidationException` — wrong login credentials, inactive account |
+| 401 Unauthorized | "Who are you?" — no/invalid credentials | `JwtAuthenticationEntryPoint` — missing/expired/garbage JWT |
+| 403 Forbidden | "I know who you are, but not allowed" | Not yet reachable — needs role-restricted endpoints (Sprint 3) |
+| 409 Conflict | Conflicts with existing server state | `ConflictException` — duplicate email at registration |
 
 ### Boot 4 / Framework Gotchas
 
 **Q: Constructor-injecting `com.fasterxml.jackson.databind.ObjectMapper` compiled fine but failed at startup with "no bean of that type" — why?**
-A: Spring Boot 4.1's default JSON engine is **Jackson 3**, under a new Maven groupId/package (`tools.jackson.databind.ObjectMapper`). `spring-boot-starter-jackson` only autoconfigures a bean of that new type. The classic Jackson 2 classes (`com.fasterxml.jackson.*`) were still resolvable at compile time because `jjwt-jackson` pulls them in transitively for jjwt's own internal claim serialization — but that's never a Spring-managed bean. A class being on the classpath and a class having a Spring bean are two different questions; this is the case where they silently diverged. Fix: inject `tools.jackson.databind.ObjectMapper` instead.
+A: Spring Boot 4.1's default JSON engine is **Jackson 3**, under a new package (`tools.jackson.databind.ObjectMapper`) — `spring-boot-starter-jackson` only autoconfigures a bean of that type. Classic Jackson 2 classes were still resolvable at compile time because `jjwt-jackson` pulls them in transitively for jjwt's own internal use, but that's never a Spring-managed bean. A class on the classpath and a class having a Spring bean are different questions. Fix: inject `tools.jackson.databind.ObjectMapper` instead.
 
 **Q: Where did `UsernamePasswordAuthenticationFilter` move, and why does it matter?**
-A: Spring Security 7.x (paired with Boot 4.1.0) moved it from `org.springframework.security.authentication` to `org.springframework.security.web.authentication`. Any Boot-3-era Spring Security tutorial/snippet using the old import fails to compile as-is — caught immediately via `./mvnw compile`, not a runtime surprise.
+A: Spring Security 7.x (Boot 4.1.0) moved it from `org.springframework.security.authentication` to `org.springframework.security.web.authentication`. Boot-3-era tutorials using the old import fail to compile as-is.
 
 ### Testing Strategy
 
 **Q: Why is `AuthServiceImplTest` a plain Mockito unit test (`@Mock`/`@InjectMocks`, no Spring context) instead of `@SpringBootTest` + `@MockBean`?**
-A: Nothing under test needs Spring wiring — `AuthServiceImpl`'s logic (uniqueness check, password hashing, status check) is pure business logic sitting behind an interface boundary to its four collaborators (`UserRepository`, `WalletRepository`, `PasswordEncoder`, `JwtUtil`). Booting a full Spring context to test that logic would be slower for no correctness benefit, and this environment has no DB/Docker connectivity to back a real context anyway. Same reasoning already applied to `JwtUtilTest` in Sprint 1/2 — extended here to mocking real collaborators, since unlike `JwtUtil`, `AuthServiceImpl` actually has dependencies that need stubbing rather than avoiding.
+A: Nothing under test needs Spring wiring — `AuthServiceImpl`'s logic sits behind an interface boundary to its four collaborators (`UserRepository`, `WalletRepository`, `PasswordEncoder`, `JwtUtil`). Booting a full Spring context would be slower for no correctness benefit, and this environment has no DB/Docker connectivity to back a real context anyway.
 
 **Q: How do you unit-test a method that calls `repository.save()` and then reads the ID Hibernate would generate, without a real database?**
-A: Stub `save()` with Mockito's `thenAnswer` to mutate and return the same entity instance passed in — `invocation.getArgument(0)` — setting a fixed UUID on it before returning. This mirrors real Hibernate behavior for `GenerationType.UUID` specifically: the ID is generated client-side and assigned onto the entity *before* the insert, not populated afterward the way an auto-increment `IDENTITY` strategy would be. A test double should match the real timing semantics it's standing in for, not just return *some* value.
+A: Stub `save()` with Mockito's `thenAnswer` to mutate and return the same entity instance passed in, setting a fixed UUID before returning — mirrors real Hibernate behavior for `GenerationType.UUID`, where the ID is generated client-side *before* the insert, unlike an auto-increment `IDENTITY` strategy.
