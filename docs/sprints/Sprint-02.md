@@ -423,7 +423,11 @@ ROLE_PASSENGER (Sprint 3), wallet recharge/payment flows (Sprint 5), Flyway (def
 
 ### Git
 
-- [ ] S2-24 — Commit and merge `feature/auth` into `dev`
+- [x] S2-24 — Commit and merge `feature/auth` into `dev`. Committed S2-22 bug
+  fixes + S2-23 tests + docs on the feature branch (`a60d4ef`), merged into
+  `dev` with `--no-ff` (`4b7af17`), `dev` pushed to `origin/dev`. Feature
+  branch left unpushed for its final commit — disposable after merge, no PR
+  workflow in use. Verified: `./mvnw compile` clean on `dev` post-merge.
 
 ---
 
@@ -458,4 +462,4 @@ ROLE_PASSENGER (Sprint 3), wallet recharge/payment flows (Sprint 5), Flyway (def
 - [x] Swagger UI still accessible at `/swagger-ui/index.html` after SecurityConfig update
 - [x] All 5 Postman requests pass
 - [x] All 5 unit tests in `AuthServiceImplTest` pass
-- [ ] `feature/auth` merged into `dev`, build clean
+- [x] `feature/auth` merged into `dev`, build clean
