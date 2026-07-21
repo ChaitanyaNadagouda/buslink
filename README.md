@@ -29,7 +29,7 @@ Copy the example env file and fill in real values:
 cp infrastructure/.env.example infrastructure/.env
 ```
 
-Edit `infrastructure/.env` and set `POSTGRES_USER`, `POSTGRES_PASSWORD`, `PGADMIN_DEFAULT_EMAIL`, and `PGADMIN_DEFAULT_PASSWORD`. This file is gitignored and must never be committed.
+Edit `infrastructure/.env` and set `POSTGRES_USER`, `POSTGRES_PASSWORD`, `PGADMIN_DEFAULT_EMAIL`, `PGADMIN_DEFAULT_PASSWORD`, and `JWT_SECRET` (generate with `openssl rand -base64 32`). This file is gitignored and must never be committed.
 
 ## 3. Start PostgreSQL and pgAdmin
 
@@ -43,7 +43,7 @@ This starts:
 
 ## 4. Run the backend
 
-The app reads `${POSTGRES_USER}`/`${POSTGRES_PASSWORD}`/`${POSTGRES_DB}` from `application.properties`, which in turn expects them as real environment variables — `infrastructure/.env` is only read by Docker Compose, not by Spring Boot directly. Load it into your shell before running:
+The app reads `${POSTGRES_USER}`/`${POSTGRES_PASSWORD}`/`${POSTGRES_DB}`/`${JWT_SECRET}` from `application.properties`, which in turn expects them as real environment variables — `infrastructure/.env` is only read by Docker Compose, not by Spring Boot directly. Load it into your shell before running:
 
 ```bash
 cd backend
@@ -51,7 +51,7 @@ set -a && source ../infrastructure/.env && set +a
 ./mvnw spring-boot:run
 ```
 
-**If running from IntelliJ instead:** add `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB` as environment variables in the Run Configuration for `BusLinkApplication`, since IntelliJ won't pick up `infrastructure/.env` automatically either.
+**If running from IntelliJ instead:** add `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, and `JWT_SECRET` as environment variables in the Run Configuration for `BusLinkApplication`, since IntelliJ won't pick up `infrastructure/.env` automatically either.
 
 The app starts on `localhost:8080`. Schema is managed via `ddl-auto=update` (no Flyway yet — deferred to post-LLD).
 

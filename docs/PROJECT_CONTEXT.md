@@ -8,11 +8,13 @@ BusLink
 
 ## Current Sprint
 
-Sprint 1
+Sprint 2
 
 ## Current Objective
 
-Establish complete backend development infrastructure before writing application code.
+Implement JWT-based authentication for passengers: repository/service layer carried over
+from Sprint 1, QR token generation at registration, and the first secured REST endpoints
+(register, login, refresh, profile, QR fetch).
 
 ## Completed
 
@@ -54,15 +56,27 @@ Docker Compose.
 
 ## Next Planned Milestone
 
-Per `docs/sprints/Sprint-01.md` (the active sprint file — source of truth for scope): generate the Spring Boot project, scaffold the flat package structure, create all JPA entities, connect to PostgreSQL, and verify the app starts with all tables created. No business logic, REST APIs, auth, or Flyway (Flyway is explicitly deferred to post-LLD).
+Per `docs/sprints/Sprint-02.md` (the active sprint file — source of truth for scope): all
+implementation (S2-01–S2-20) and Postman verification (S2-21/S2-22) are complete — the
+app boots clean via IntelliJ (EnvFile plugin loading `infrastructure/.env`), and all 5
+Postman requests (register/login/refresh/profile/qr) pass against a live DB, including
+pgAdmin checks on both `users` and `wallet`. Two bugs found during verification and
+fixed: unauthenticated requests returned 403 instead of 401 (missing
+`AuthenticationEntryPoint`), and duplicate-email registration returned 400 instead of 409
+(wrong exception type) — see `DEVELOPMENT_LOG.md` for root causes. Remaining: S2-23
+(`AuthServiceImplTest` unit tests) and S2-24 (merge `feature/auth` into `dev`). Out of
+scope: conductor auth (Sprint 3), role-based security beyond `ROLE_PASSENGER`
+(Sprint 3), wallet recharge/payment flows (Sprint 5), Flyway (deferred).
 
-S1-01 through S1-27 complete, plus S1-31 (added mid-sprint: `Payment` entity). Remaining: S1-30 (README). S1-28/S1-29 (repository + service stub) moved to Sprint 2 (2026-07-07, approved) — repository/service work will be built together there as one coherent unit instead of a stub now.
+**Sprint 1 — closed (2026-07-08).** All Definition of Done items verified, including the
+final one (9 tables visually confirmed in pgAdmin — previously only checked via Hibernate's
+DDL log). S1-28/S1-29 (repository + service stub) moved to Sprint 2, to be built together
+with the rest of the auth flow as one coherent unit rather than a stub built twice.
 
 ## Notes
 
-- No business logic has been implemented yet.
-- All 9 entities created and verified in Postgres: `User`, `Wallet`, `Transaction`, `Payment`, `Route`, `Bus`, `Conductor`, `Ticket`, `SyncEvent` — tables confirmed via Hibernate DDL log, app starts clean, `ddl-auto=update`.
-- No REST APIs have been developed.
-- No authentication exists yet — `SecurityConfig` is a permit-all stub (JWT is out of scope for Sprint 1).
+- Sprint 1 delivered infrastructure only — no business logic, no REST APIs, no auth exist
+  yet. `SecurityConfig` is still the Sprint 1 permit-all stub; Sprint 2's S2-05 replaces it.
+- All 9 entities created and verified in Postgres: `User`, `Wallet`, `Transaction`, `Payment`, `Route`, `Bus`, `Conductor`, `Ticket`, `SyncEvent` — confirmed via both Hibernate DDL log and a visual pgAdmin check, app starts clean, `ddl-auto=update`.
 - Swagger UI verified working (credential-free) at `/swagger-ui/index.html`.
-- `backend/` is committed and pushed to GitHub (`buslink` repo, `feature/project-setup` branch); branch strategy (`main` → `dev` → `feature/*`) is in place. Latest work (S1-06 onward) not yet committed — pending.
+- `backend/` (and `docs/`, `infrastructure/`) committed and pushed to GitHub (`buslink` monorepo); Sprint 1 work merged from `feature/project-setup` into `dev` (`ae3d60e`); branch strategy (`main` → `dev` → `feature/*`) is in place. Sprint 2 work is on `feature/auth-register-login-refresh-uerProfile-QR-generation`, pushed to origin but not yet merged into `dev` — that's S2-24.
