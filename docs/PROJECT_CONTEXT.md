@@ -56,14 +56,17 @@ Docker Compose.
 
 ## Next Planned Milestone
 
-Per `docs/sprints/Sprint-02.md` (the active sprint file — source of truth for scope): carry
-over `UserRepository`/`WalletRepository`/`UserServiceImpl` stub from Sprint 1 (S1-28/S1-29),
-then build JWT infrastructure (`JwtUtil`, `JwtAuthenticationFilter`,
-`UserDetailsServiceImpl`), lock down `SecurityConfig`, implement the passenger auth flow
-(register/login/refresh), QR token generation, and `UserController`
-(`/user/profile`, `/user/qr`). Out of scope: conductor auth (Sprint 3), role-based security
-beyond `ROLE_PASSENGER` (Sprint 3), wallet recharge/payment flows (Sprint 5), Flyway
-(deferred).
+Per `docs/sprints/Sprint-02.md` (the active sprint file — source of truth for scope): all
+implementation (S2-01–S2-20) and Postman verification (S2-21/S2-22) are complete — the
+app boots clean via IntelliJ (EnvFile plugin loading `infrastructure/.env`), and all 5
+Postman requests (register/login/refresh/profile/qr) pass against a live DB, including
+pgAdmin checks on both `users` and `wallet`. Two bugs found during verification and
+fixed: unauthenticated requests returned 403 instead of 401 (missing
+`AuthenticationEntryPoint`), and duplicate-email registration returned 400 instead of 409
+(wrong exception type) — see `DEVELOPMENT_LOG.md` for root causes. Remaining: S2-23
+(`AuthServiceImplTest` unit tests) and S2-24 (merge `feature/auth` into `dev`). Out of
+scope: conductor auth (Sprint 3), role-based security beyond `ROLE_PASSENGER`
+(Sprint 3), wallet recharge/payment flows (Sprint 5), Flyway (deferred).
 
 **Sprint 1 — closed (2026-07-08).** All Definition of Done items verified, including the
 final one (9 tables visually confirmed in pgAdmin — previously only checked via Hibernate's
@@ -76,4 +79,4 @@ with the rest of the auth flow as one coherent unit rather than a stub built twi
   yet. `SecurityConfig` is still the Sprint 1 permit-all stub; Sprint 2's S2-05 replaces it.
 - All 9 entities created and verified in Postgres: `User`, `Wallet`, `Transaction`, `Payment`, `Route`, `Bus`, `Conductor`, `Ticket`, `SyncEvent` — confirmed via both Hibernate DDL log and a visual pgAdmin check, app starts clean, `ddl-auto=update`.
 - Swagger UI verified working (credential-free) at `/swagger-ui/index.html`.
-- `backend/` (and `docs/`, `infrastructure/`) committed and pushed to GitHub (`buslink` monorepo); Sprint 1 work merged from `feature/project-setup` into `dev` (`ae3d60e`); branch strategy (`main` → `dev` → `feature/*`) is in place. Sprint 2 work will land on a new `feature/auth` branch (S2-24).
+- `backend/` (and `docs/`, `infrastructure/`) committed and pushed to GitHub (`buslink` monorepo); Sprint 1 work merged from `feature/project-setup` into `dev` (`ae3d60e`); branch strategy (`main` → `dev` → `feature/*`) is in place. Sprint 2 work is on `feature/auth-register-login-refresh-uerProfile-QR-generation`, pushed to origin but not yet merged into `dev` — that's S2-24.

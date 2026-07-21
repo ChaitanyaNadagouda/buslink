@@ -337,30 +337,89 @@ ROLE_PASSENGER (Sprint 3), wallet recharge/payment flows (Sprint 5), Flyway (def
 
 ### Testing & Verification
 
-- [ ] S2-21 — Postman collection — create `BusLink API` collection with folders:
-  - `Auth`: POST /auth/register, POST /auth/login, POST /auth/refresh
-  - `User`: GET /user/profile, GET /user/qr
-  Set collection-level variable `{{baseUrl}} = http://localhost:8080` and
-  `{{accessToken}}` (populated automatically from login response via Postman test script).
+- [x] S2-21 — Postman collection — `postman/BusLink-API.postman_collection.json`
+  (Postman Collection v2.1 schema), `Auth` folder (Register, Login, Refresh) and `User`
+  folder (Profile, QR Token). Collection variables `baseUrl = http://localhost:8080` and
+  `accessToken` (empty, auto-populated). Login's Tests-tab script reads
+  `pm.response.json().data.accessToken` (matches `ApiResponse`'s `{success, message,
+  data}` envelope) and stores it via `pm.collectionVariables.set`, plus two `pm.test()`
+  assertions (200 status, non-empty token). Imported and confirmed working in Postman
+  Desktop. Verified: file is valid JSON (`python3 -m json.tool`), collection imports
+  cleanly, all 5 requests visible.
 
-- [ ] S2-22 — Postman verification sequence:
-  1. `POST /auth/register` — new user → expect 200, `AuthResponseDTO` returned,
-     `qrToken` non-null in DB (verify in pgAdmin: `SELECT qr_token FROM users`)
-  2. `POST /auth/login` — same credentials → expect 200, tokens returned
-  3. `GET /user/profile` — with Bearer token → expect 200, profile returned
-  4. `GET /user/qr` — with Bearer token → expect 200, qrToken returned
-  5. `GET /user/profile` — without token → expect 401
-  6. `POST /auth/register` — same email again → expect 409 conflict
-  7. `POST /auth/login` — wrong password → expect 400
+- [x] S2-22 — Postman verification sequence — run against a live app (IntelliJ run
+  config, `JWT_SECRET`/`POSTGRES_*` loaded via the EnvFile plugin pointed at
+  `infrastructure/.env`) and DB (Docker Compose `buslink-postgres`/`buslink-pgadmin`).
+  All steps passed:
+  1. `POST /auth/register` — 200, tokens returned; `qr_token` confirmed non-null in
+     pgAdmin; `wallet` row confirmed `balance=0`, `status=ACTIVE`
+  2. `POST /auth/login` — 200, tokens returned, `accessToken` variable auto-populated
+  3. `GET /user/profile` — 200, profile returned (`qrToken` matches step 1)
+  4. `GET /user/qr` — 200, bare string matches step 1/3
+  5. `GET /user/profile` without token — 401 (see bug below)
+  6. `POST /auth/register` same email again — 409 (see bug below)
+  7. `POST /auth/login` wrong password — 400, generic "Invalid email or password"
+  8. `POST /auth/refresh` — 200, new `accessToken` issued, `refreshToken` confirmed
+     byte-identical to the one sent (not rotated, matches S2-14 design) — not in the
+     original 7-step list above but required by this file's own Definition of Done
+     ("All 5 Postman requests pass"); added and run for completeness.
 
-- [ ] S2-23 — Unit tests in `src/test/`:
-  - `AuthServiceImplTest` — mock `UserRepository`, `WalletRepository`,
-    `PasswordEncoder`, `JwtUtil`:
-    - `register_success` — verify user saved, wallet created, tokens returned
-    - `register_duplicateEmail` — verify `ValidationException` thrown
+  **Bug found and fixed (amendment to S2-05):** step 5 initially returned `403`, not
+  `401`. Root cause: `SecurityConfig` had no `.exceptionHandling(...)` /
+  `AuthenticationEntryPoint` configured, and with no `httpBasic()`/`formLogin()`
+  enabled either, Spring Security's `ExceptionTranslationFilter` had nothing to
+  challenge with and silently fell back to `Http403ForbiddenEntryPoint`. Fixed by
+  adding `JwtAuthenticationEntryPoint.java` (`security/`, implements
+  `AuthenticationEntryPoint`) writing a `401` with an `ApiResponse.error(...)` body,
+  wired via `.exceptionHandling(ex -> ex.authenticationEntryPoint(...))` in
+  `SecurityConfig`. Hit a second issue while building this fix: constructor-injecting
+  `com.fasterxml.jackson.databind.ObjectMapper` failed at startup
+  ("no bean of that type") — Spring Boot 4.1's `spring-boot-starter-jackson`
+  autoconfigures a bean of the new **Jackson 3** type, `tools.jackson.databind.ObjectMapper`
+  (new groupId/package under Boot 4's Jackson 3 default), not classic Jackson 2's
+  `com.fasterxml.jackson.databind`. The `com.fasterxml.jackson` classes present on the
+  classpath are pulled in transitively by `jjwt-jackson` (S2-01) for jjwt's own internal
+  use only — never Spring-managed. Corrected the import to `tools.jackson.databind
+  .ObjectMapper`. Verified: `./mvnw compile` clean, app restarts clean, step 5 returns
+  401 with `{"success":false,"message":"Full authentication is required to access this
+  resource","data":null}`.
+
+  **Bug found and fixed (amendment to S2-12):** step 6 initially returned `400`, not
+  `409`. Root cause: the duplicate-email check in `AuthServiceImpl.register()` threw
+  `ValidationException`, which `GlobalExceptionHandler` unconditionally maps to `400` —
+  semantically wrong, since a duplicate email is a conflict with existing state (409),
+  not a malformed request (400). Fixed by adding `ConflictException` (`exception/`,
+  same minimal shape as `ValidationException`), a new `GlobalExceptionHandler` rule
+  mapping it to `409`, and swapping `register()`'s duplicate-email throw from
+  `ValidationException` to `ConflictException`. `login()`/`refreshToken()`'s existing
+  `ValidationException` usages are untouched — those are genuinely bad requests, not
+  conflicts. Verified: `./mvnw compile` clean, app restarts clean, step 6 returns 409
+  with `{"success":false,"message":"Email already registered: 'rider1@example.com'",
+  "data":null}`.
+
+- [x] S2-23 — Unit tests in `src/test/`:
+  - `AuthServiceImplTest.java` in `src/test/java/com/buslink/service/impl/` — plain
+    Mockito unit test (`@ExtendWith(MockitoExtension.class)`, `@Mock`/`@InjectMocks`,
+    no Spring context), same "no Spring context" reasoning as `JwtUtilTest` (S2-02),
+    now extended to mocking real collaborators since `AuthServiceImpl` has them
+    (`JwtUtil` didn't).
+    - `register_success` — verifies `Wallet` saved with `userId`/`balance=0`/`ACTIVE`,
+      `AuthResponseDTO` carries correct user fields + mocked tokens.
+      `userRepository.save()` stubbed via `thenAnswer` to set the generated `userId`
+      onto the passed-in entity and return it — mirrors real Hibernate behavior for
+      `GenerationType.UUID` (ID assigned client-side before insert).
+    - `register_duplicateEmail` — verify `ConflictException` thrown.
+      **Deviation from this task's original wording (discussed, approved):** written
+      here as `ValidationException`, but `AuthServiceImpl.register()` has thrown
+      `ConflictException` since the S2-22 bug fix (400→409). Test asserts the real,
+      current behavior, not the stale task text.
     - `login_success` — verify tokens returned
     - `login_wrongPassword` — verify `ValidationException` thrown
     - `login_inactiveUser` — verify `ValidationException` thrown
+  - Verified: `./mvnw test -Dtest=AuthServiceImplTest` — 5/5 pass. Full `./mvnw test`
+    also run: `JwtUtilTest` still 6/6, only pre-existing failure is
+    `BusLinkApplicationTests.contextLoads` (no DB/Docker in this shell — same
+    known gap noted since S2-01, unrelated to this change).
 
 ### Git
 
@@ -386,14 +445,17 @@ ROLE_PASSENGER (Sprint 3), wallet recharge/payment flows (Sprint 5), Flyway (def
 
 ## Definition of Done
 
-- [ ] `POST /auth/register` creates a User (status=ACTIVE) and Wallet (balance=0)
-      in DB, returns JWT access + refresh tokens and a non-null `qrToken`
-- [ ] `POST /auth/login` with correct credentials returns tokens
-- [ ] `POST /auth/login` with wrong credentials returns 400 via `ApiResponse`
-- [ ] `GET /user/profile` with valid Bearer token returns profile — 401 without token
-- [ ] `GET /user/qr` with valid Bearer token returns `qrToken`
-- [ ] `POST /auth/register` with duplicate email returns 409 via `ApiResponse`
-- [ ] Swagger UI still accessible at `/swagger-ui/index.html` after SecurityConfig update
-- [ ] All 5 Postman requests pass
-- [ ] All 5 unit tests in `AuthServiceImplTest` pass
+- [x] `POST /auth/register` creates a User (status=ACTIVE) and Wallet (balance=0)
+      in DB, returns JWT access + refresh tokens and a non-null `qrToken` — verified
+      via pgAdmin (both tables checked directly, not inferred)
+- [x] `POST /auth/login` with correct credentials returns tokens
+- [x] `POST /auth/login` with wrong credentials returns 400 via `ApiResponse`
+- [x] `GET /user/profile` with valid Bearer token returns profile — 401 without token
+      — 401 required a fix, see S2-22 bug note above
+- [x] `GET /user/qr` with valid Bearer token returns `qrToken`
+- [x] `POST /auth/register` with duplicate email returns 409 via `ApiResponse`
+      — 409 required a fix, see S2-22 bug note above
+- [x] Swagger UI still accessible at `/swagger-ui/index.html` after SecurityConfig update
+- [x] All 5 Postman requests pass
+- [x] All 5 unit tests in `AuthServiceImplTest` pass
 - [ ] `feature/auth` merged into `dev`, build clean

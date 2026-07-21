@@ -8,6 +8,7 @@ import com.buslink.entity.User;
 import com.buslink.entity.Wallet;
 import com.buslink.enums.UserStatus;
 import com.buslink.enums.WalletStatus;
+import com.buslink.exception.ConflictException;
 import com.buslink.exception.ValidationException;
 import com.buslink.repository.UserRepository;
 import com.buslink.repository.WalletRepository;
@@ -33,7 +34,7 @@ public class AuthServiceImpl implements AuthService {
     @Transactional
     public AuthResponseDTO register(UserSignUpRequestDTO request) {
         userRepository.findByEmail(request.email()).ifPresent(existing -> {
-            throw new ValidationException("Email already registered: '" + request.email() + "'");
+            throw new ConflictException("Email already registered: '" + request.email() + "'");
         });
 
         User user = User.builder()

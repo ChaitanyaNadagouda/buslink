@@ -103,3 +103,40 @@ Started (2026-07-08)
 - Sprint 2 plan approved; `docs/sprints/Sprint-02.md` created as the active sprint file, `DEVELOPMENT_ROADMAP.md` updated to point to it
 - Scope: carry over `UserRepository`/`WalletRepository`/`UserServiceImpl` stub (S1-28/S1-29), JWT infrastructure, locked-down `SecurityConfig`, passenger register/login/refresh, QR token generation, `UserController` (`/user/profile`, `/user/qr`)
 - Next: S1-28 (`UserRepository`)
+
+## Postman Verification & Bug Fixes (2026-07-20)
+
+Completed
+
+- S2-21: built `postman/BusLink-API.postman_collection.json` — `Auth` (Register, Login,
+  Refresh) and `User` (Profile, QR Token) folders, `baseUrl`/`accessToken` collection
+  variables, Login's Tests script auto-captures `accessToken` for chained requests.
+  Imported and run from Postman Desktop.
+- S2-22: full verification pass against a live app (IntelliJ run config + EnvFile
+  plugin loading `infrastructure/.env`) and DB (Docker Compose). All 5 requests
+  confirmed working end-to-end, including direct pgAdmin checks on both `users`
+  (`qr_token`) and `wallet` (`balance=0`, `status=ACTIVE`) rather than inferring the
+  latter from transaction atomicity.
+- **Bug found:** unauthenticated requests to protected endpoints returned `403`
+  instead of `401`. Root cause: no `AuthenticationEntryPoint` was configured in
+  `SecurityConfig` — with no `httpBasic()`/`formLogin()` enabled either, Spring
+  Security had nothing to challenge with and silently defaulted to
+  `Http403ForbiddenEntryPoint`. Fixed with a new `JwtAuthenticationEntryPoint`
+  (`security/`) returning a `401` in the standard `ApiResponse` shape.
+- **Gotcha hit while fixing the above:** constructor-injecting
+  `com.fasterxml.jackson.databind.ObjectMapper` (classic Jackson 2) failed at startup —
+  Spring Boot 4.1's `spring-boot-starter-jackson` autoconfigures a bean of the new
+  **Jackson 3** type (`tools.jackson.databind.ObjectMapper`, new groupId/package) as
+  its default, not Jackson 2. The Jackson 2 classes on the classpath come from
+  `jjwt-jackson` (S2-01) for jjwt's own internal use only — never Spring-managed.
+  Logged in `ARCHITECTURE.md` alongside the other Boot-4-vs-Boot-3 gotchas.
+- **Bug found:** duplicate-email registration returned `400` instead of `409`. Root
+  cause: `AuthServiceImpl.register()` threw `ValidationException`, which
+  `GlobalExceptionHandler` unconditionally maps to `400` — semantically wrong for a
+  conflict-with-existing-state case. Fixed by adding `ConflictException`
+  (`exception/`) mapped to `409`, used only for this case; `login()`/`refreshToken()`
+  keep their existing `ValidationException`/`400` usage unchanged, since those are
+  genuinely bad requests.
+- Sprint-02.md and its Definition of Done updated to reflect all of the above,
+  verified individually rather than assumed from the task list.
+- Next: S2-23 (`AuthServiceImplTest` unit tests), then S2-24 (merge `feature/auth` into `dev`)
