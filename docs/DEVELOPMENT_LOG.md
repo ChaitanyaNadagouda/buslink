@@ -140,3 +140,33 @@ Completed
 - Sprint-02.md and its Definition of Done updated to reflect all of the above,
   verified individually rather than assumed from the task list.
 - Next: S2-23 (`AuthServiceImplTest` unit tests), then S2-24 (merge `feature/auth` into `dev`)
+
+## Unit Tests & Sprint Closure (2026-07-21)
+
+Completed
+
+- S2-23: `AuthServiceImplTest.java` (`src/test/java/com/buslink/service/impl/`) —
+  plain Mockito unit test (`@ExtendWith(MockitoExtension.class)`, `@Mock`/
+  `@InjectMocks`, no Spring context, same reasoning as `JwtUtilTest`), 5 tests:
+  `register_success`, `register_duplicateEmail`, `login_success`,
+  `login_wrongPassword`, `login_inactiveUser`. `userRepository.save()` stubbed via
+  `thenAnswer` to set the generated `userId` onto the passed-in entity and return
+  it, mirroring real Hibernate behavior for `GenerationType.UUID`.
+  **Deviation (discussed, approved):** `register_duplicateEmail` asserts
+  `ConflictException`, not the `ValidationException` the original task text named —
+  the real code has thrown `ConflictException` since the S2-22 bug fix, so the test
+  follows current behavior, not stale task wording. Verified:
+  `./mvnw test -Dtest=AuthServiceImplTest` — 5/5 pass; full `./mvnw test` run
+  alongside it, `JwtUtilTest` still 6/6, only pre-existing failure is
+  `BusLinkApplicationTests.contextLoads` (no DB/Docker in this shell, unrelated).
+- S2-24: committed S2-22 bug fixes + S2-23 tests + docs on the feature branch
+  (`a60d4ef`), merged into `dev` with `--no-ff` (`4b7af17`), `dev` pushed to
+  `origin/dev`. Feature branch's remote copy left one commit behind — disposable
+  after merge, no PR workflow in use for this project (see `PROJECT_CONTEXT.md`
+  notes on branch strategy). Verified: `./mvnw compile` clean on `dev` post-merge.
+- **Sprint 2 declared complete (2026-07-21).** All Definition of Done items
+  verified individually: register/login/refresh issuing JWT tokens, QR token
+  generation, secured profile/QR endpoints, both S2-22 bug fixes (403→401,
+  400→409), Swagger UI still reachable, all 5 Postman requests passing, all 5
+  `AuthServiceImplTest` unit tests passing, `feature/auth` merged into `dev` with
+  a clean build.
