@@ -69,12 +69,22 @@ When all tasks in the active sprint are complete:
 
 1. Announce sprint completion.
 2. Summarize what was accomplished.
-3. Merge `dev` into `main` and push `main`, so `main` and `dev` stay in sync at
+3. Update every essentials doc the sprint's work touched — don't assume only
+   `PROJECT_CONTEXT.md`/`DEVELOPMENT_LOG.md` need it. Check each one explicitly
+   against what the sprint actually built:
+   - `docs/PROJECT_CONTEXT.md` — current state
+   - `docs/DEVELOPMENT_LOG.md` — closure entry
+   - `docs/ARCHITECTURE.md` — only if a design/tech decision changed
+   - `docs/API.md` — any endpoint the sprint added or changed
+   - `docs/INTERVIEW_PREP.md` — a new `## Sprint N` section for any non-obvious
+     decision made (bugs found + root cause, deviations, trade-offs discussed)
+   - `docs/DEVELOPMENT_ROADMAP.md`'s `Sprint Status` line — flip to reflect closure
+4. Merge `dev` into `main` and push `main`, so `main` and `dev` stay in sync at
    every sprint boundary (confirm with me before pushing `main`, same as any
    shared-state push).
-4. Ask me to finalize the sprint in Notion.
-5. Ask me to prepare the next sprint plan.
-6. Generate the next sprint file after I approve the plan.
-7. Update DEVELOPMENT_ROADMAP.md with the new active sprint.
-8. Wait for my approval before beginning the next sprint.
+5. Ask me to finalize the sprint in Notion.
+6. Ask me to prepare the next sprint plan.
+7. Generate the next sprint file after I approve the plan.
+8. Update DEVELOPMENT_ROADMAP.md with the new active sprint.
+9. Wait for my approval before beginning the next sprint.
 
