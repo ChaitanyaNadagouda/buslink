@@ -127,4 +127,7 @@ Whenever architecture changes significantly, remind me to update:
 - **docs/ARCHITECTURE.md** — high-level design decisions.
 - **docs/API.md** — API documentation and notes.
 - **docs/DEVELOPMENT_LOG.md** — history of completed work and milestones.
-- **docs/INTERVIEW_PREP.md** — interview Q&A notes on non-obvious engineering decisions (the *why*, not just the *what*). Update whenever a new non-trivial design decision gets made — same trigger as the other docs above.
+- **docs/INTERVIEW_PREP.md** — senior SDE2-level interview prep notes. Updated automatically at every sprint close (see `docs/SESSION_START.md`), not only when a new non-trivial design decision is made:
+  - Non-obvious engineering decisions (the *why*, not just the *what*).
+  - A curated, high-yield set of fundamentals/framework questions per concept the sprint actually used (e.g. Spring Security, JWT, JPA/Hibernate, transactions, layered architecture) — selective, not exhaustive; only what has real probability of coming up.
+  - Answers short enough for a quick recap, with a diagram/visualization (ASCII flow, sequence, comparison table) only where it beats prose for fast recall.

@@ -61,10 +61,23 @@ The sprint file becomes the implementation source of truth for Claude during dev
      - `docs/ARCHITECTURE.md` — only if a design/tech decision changed
      - `docs/API.md` — any endpoint the sprint added or changed; a sprint that
        ships an endpoint isn't done until it's documented here
-     - `docs/INTERVIEW_PREP.md` — a new `## Sprint N` section for any non-obvious
-       decision made (bugs found + root cause, deviations from the plan,
-       trade-offs discussed) — these are exactly the things worth being able to
-       explain later and easiest to forget once the sprint is behind us
+     - `docs/INTERVIEW_PREP.md` — a new `## Sprint N` section, aimed at senior
+       SDE2-level interviews. Do this automatically at every sprint close,
+       without being asked again:
+       - Cover the non-obvious decisions made that sprint (bugs + root cause,
+         deviations from the plan, trade-offs discussed) plus the
+         fundamentals/framework/concepts the sprint actually used (e.g. Spring
+         Security filter chain, JWT, JPA/Hibernate, transactions, layered
+         architecture, REST semantics).
+       - Be selective, not exhaustive: only questions with real probability of
+         coming up — the ones an interviewer would actually reach for on that
+         topic. A handful of high-yield Q&As per topic beats a long tail of
+         unlikely ones; this doc is for fast revision under time pressure, not
+         full reference coverage (the code and sprint files are the reference).
+       - Keep answers short enough to recap in one read-through.
+       - Add a simple diagram/visualization (ASCII flow, sequence, or
+         comparison table) only where it genuinely speeds up recall over prose
+         — not as decoration on every answer.
      - This `Sprint Status` line — flip to reflect closure
   4. Merge `dev` into `main` and push `main`, so `main` and `dev` stay in sync at
      every sprint boundary (confirm with me before pushing `main`, same as any
