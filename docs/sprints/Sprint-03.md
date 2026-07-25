@@ -262,8 +262,8 @@ payment flows (Sprint 5), Redis caching of routes/fare (Sprint 6), Flyway (defer
 
 ### Conductor Auth Service
 
-- [ ] S3-17 — Create `ConductorService.java` interface in `service/`
-- [ ] S3-18 — Create `ConductorServiceImpl.java` in `service/impl/`:
+- [x] S3-17 — Create `ConductorService.java` interface in `service/`
+- [x] S3-18 — Create `ConductorServiceImpl.java` in `service/impl/`:
   - `login(ConductorLoginRequestDTO)`:
     1. Load conductor by email — throw `ValidationException("Invalid email or password")`
        if not found (same user-enumeration prevention as Sprint 2 passenger login)
@@ -278,14 +278,28 @@ payment flows (Sprint 5), Redis caching of routes/fare (Sprint 6), Flyway (defer
     2. Verify bus exists
     3. Update `conductor.busId`
     4. Save and return `ConductorResponseDTO`
-  - Verify: `./mvnw compile clean`
+  - Added a guard not spelled out in the plan: `conductor.getBusId() == null`
+    throws `ValidationException("Conductor is not assigned to a bus")` before
+    calling `busRepository.findById(...)`. `Conductor.busId` is nullable in
+    the schema, so a conductor with no bus assigned is a real reachable
+    state, not hypothetical — without the guard, `findById(null)` would
+    surface as an unhelpful generic 500 instead of a clear 400.
+  - Verified: `./mvnw compile clean` — BUILD SUCCESS
 
-- [ ] S3-19 — Create `ConductorController.java` in `controller/`:
+- [x] S3-19 — Create `ConductorController.java` in `controller/`:
   - `POST /conductor/auth/login` → `ConductorServiceImpl.login()`
     → `ApiResponse<ConductorAuthResponseDTO>` (permit all)
   - `GET /conductor/profile` → `ConductorServiceImpl.getConductorProfile()`
     → `ApiResponse<ConductorResponseDTO>` (ROLE_CONDUCTOR)
-  - Verify: `./mvnw compile clean`, app starts clean
+  - Verified: `./mvnw compile clean` — BUILD SUCCESS
+  - **Live end-to-end verification (login → profile against a running app +
+    real Postgres) is still pending** — blocked mid-attempt by the local
+    Docker daemon becoming unresponsive (`docker version`/`docker ps`/`docker
+    exec` all timing out with the socket present but nothing answering
+    behind it). No test data was written before the hang (the insert never
+    completed). Committing on compile-verification alone per explicit
+    instruction; live verification to follow once Docker is confirmed
+    responsive again.
 
 ### Route Service
 
