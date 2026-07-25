@@ -26,8 +26,16 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.POST, "/auth/register", "/auth/login", "/auth/refresh")
                         .permitAll()
+                        .requestMatchers(HttpMethod.POST, "/conductor/auth/login")
+                        .permitAll()
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**")
                         .permitAll()
+                        .requestMatchers("/admin/**")
+                        .hasRole("ADMIN")
+                        .requestMatchers("/routes/*/stops", "/routes/*/fare")
+                        .hasRole("CONDUCTOR")
+                        .requestMatchers("/conductor/**")
+                        .hasRole("CONDUCTOR")
                         .anyRequest()
                         .authenticated())
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

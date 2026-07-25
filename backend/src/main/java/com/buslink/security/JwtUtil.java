@@ -1,5 +1,6 @@
 package com.buslink.security;
 
+import com.buslink.entity.Conductor;
 import com.buslink.entity.User;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
@@ -17,8 +18,11 @@ import org.springframework.stereotype.Component;
 public class JwtUtil {
 
     private static final String CLAIM_TYPE = "type";
+    private static final String CLAIM_ROLE = "role";
     private static final String TOKEN_TYPE_ACCESS = "access";
     private static final String TOKEN_TYPE_REFRESH = "refresh";
+    private static final String ROLE_PASSENGER = "PASSENGER";
+    private static final String ROLE_CONDUCTOR = "CONDUCTOR";
 
     private final SecretKey signingKey;
     private final long accessTokenExpiryMs;
@@ -34,15 +38,27 @@ public class JwtUtil {
     }
 
     public String generateAccessToken(User user) {
-        return buildToken(user.getEmail(), accessTokenExpiryMs, TOKEN_TYPE_ACCESS);
+        return buildToken(user.getEmail(), accessTokenExpiryMs, TOKEN_TYPE_ACCESS, ROLE_PASSENGER);
     }
 
     public String generateRefreshToken(User user) {
-        return buildToken(user.getEmail(), refreshTokenExpiryMs, TOKEN_TYPE_REFRESH);
+        return buildToken(user.getEmail(), refreshTokenExpiryMs, TOKEN_TYPE_REFRESH, ROLE_PASSENGER);
+    }
+
+    public String generateConductorAccessToken(Conductor conductor) {
+        return buildToken(conductor.getEmail(), accessTokenExpiryMs, TOKEN_TYPE_ACCESS, ROLE_CONDUCTOR);
+    }
+
+    public String generateConductorRefreshToken(Conductor conductor) {
+        return buildToken(conductor.getEmail(), refreshTokenExpiryMs, TOKEN_TYPE_REFRESH, ROLE_CONDUCTOR);
     }
 
     public String extractUsername(String token) {
         return extractClaim(token, Claims::getSubject);
+    }
+
+    public String extractRole(String token) {
+        return extractClaim(token, claims -> claims.get(CLAIM_ROLE, String.class));
     }
 
     public boolean isRefreshToken(String token) {
@@ -76,11 +92,12 @@ public class JwtUtil {
         return extractClaim(token, Claims::getExpiration).before(new Date());
     }
 
-    private String buildToken(String subject, long expiryMs, String type) {
+    private String buildToken(String subject, long expiryMs, String type, String role) {
         Date now = new Date();
         return Jwts.builder()
                 .subject(subject)
                 .claim(CLAIM_TYPE, type)
+                .claim(CLAIM_ROLE, role)
                 .issuedAt(now)
                 .expiration(new Date(now.getTime() + expiryMs))
                 .signWith(signingKey)

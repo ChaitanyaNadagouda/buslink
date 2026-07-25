@@ -151,39 +151,59 @@ payment flows (Sprint 5), Redis caching of routes/fare (Sprint 6), Flyway (defer
 
 ### Security — Role-Based
 
-- [ ] S3-11 — Update `UserDetailsServiceImpl.java` in `security/` —
+- [x] S3-11 — Update `UserDetailsServiceImpl.java` in `security/` —
   already grants `ROLE_PASSENGER` to all User rows. No change needed here —
   conductor auth uses a separate principal path (S3-12).
 
-- [ ] S3-12 — Create `ConductorPrincipal.java` in `security/` — implements
+- [x] S3-12 — Create `ConductorPrincipal.java` in `security/` — implements
   `UserDetails`, wraps `Conductor`:
   - `getAuthorities()` → `ROLE_CONDUCTOR`
   - `getUsername()` → conductor email
   - `isEnabled()` → `ConductorStatus.ACTIVE`
   - Same pattern as `UserPrincipal` from Sprint 2
 
-- [ ] S3-13 — Update `JwtUtil.java` in `security/` — add role claim to token:
+- [x] S3-13 — Update `JwtUtil.java` in `security/` — add role claim to token:
   - On `generateAccessToken()` — embed `role` claim: "PASSENGER" or "CONDUCTOR"
     (pass role as parameter or derive from principal type)
   - Add `extractRole(String token)` method
   - Add `generateConductorAccessToken(Conductor conductor)` and
     `generateConductorRefreshToken(Conductor conductor)`
   - Update `JwtUtilTest` — add test for role claim round-trip
-  - Verify: `./mvnw test -Dtest=JwtUtilTest` — all pass
+  - Decision: role baked into which method is called
+    (`generateAccessToken`/`generateConductorAccessToken`) rather than a raw
+    `String role` parameter on one shared method — every Sprint 2 call site
+    in `AuthServiceImpl` stays unchanged, and a caller can't pass the wrong
+    role string for a given principal type
+  - Verified: `./mvnw test -Dtest=JwtUtilTest` — 7/7 pass
 
-- [ ] S3-14 — Update `JwtAuthenticationFilter.java` in `security/` —
+- [x] S3-14 — Update `JwtAuthenticationFilter.java` in `security/` —
   after validating token, extract role claim and set correct principal type:
   - If role = "PASSENGER" → load via `UserDetailsServiceImpl` (existing)
   - If role = "CONDUCTOR" → load via new `ConductorDetailsServiceImpl`
-  - Verify: `./mvnw compile clean`
+  - Decision: injected the two concrete classes directly instead of the
+    shared `UserDetailsService` interface — both implementations share one
+    interface with one method, so injecting by interface type gives Spring
+    two ambiguous candidates for one field (`NoUniqueBeanDefinitionException`
+    at startup). Concrete-class injection resolves the ambiguity with zero
+    extra ceremony (`@Qualifier` was the alternative, rejected as unnecessary
+    ceremony for exactly two fixed, known implementations)
+  - Also added `/conductor/auth/**` to `shouldNotFilter` alongside the
+    existing `/auth/**` — same reasoning as Sprint 2: `permitAll()` in
+    `SecurityConfig` already covers authorization, this just avoids wasted
+    JWT-parsing work on a login request
+  - Token missing a role claim entirely (any already-issued Sprint 2 token)
+    falls through to the passenger path rather than failing — preserves
+    backward compatibility with tokens minted before this claim existed
+  - Verified: `./mvnw compile clean` — BUILD SUCCESS; app started clean
+    against live Postgres, no bean wiring conflicts
 
-- [ ] S3-15 — Create `ConductorDetailsServiceImpl.java` in `security/` —
+- [x] S3-15 — Create `ConductorDetailsServiceImpl.java` in `security/` —
   implements `UserDetailsService`:
   - `loadUserByUsername(String email)` → load from `ConductorRepository`
   - Returns `ConductorPrincipal`
-  - Verify: `./mvnw compile clean`
+  - Verified: `./mvnw compile clean` — BUILD SUCCESS
 
-- [ ] S3-16 — Update `SecurityConfig.java` in `security/` — add
+- [x] S3-16 — Update `SecurityConfig.java` in `security/` — add
   role-based rules:
   ```
   /admin/**           → ROLE_ADMIN only
@@ -196,7 +216,15 @@ payment flows (Sprint 5), Redis caching of routes/fare (Sprint 6), Flyway (defer
   /v3/api-docs/**     → permit all (existing)
   everything else     → authenticated
   ```
-  - Verify: `./mvnw compile clean`
+  - Deviated from the plan's literal `/conductor/auth/**` wildcard — used an
+    explicit `POST /conductor/auth/login` matcher instead, matching the
+    tighter-scoping convention `/auth/register|login|refresh` already uses
+    (named POST paths, not a blanket `/auth/**` permitAll)
+  - Ordering matters: `authorizeHttpRequests` matches rules top-to-bottom,
+    first match wins — `/conductor/auth/login` permitAll is declared *before*
+    `/conductor/**` → `hasRole("CONDUCTOR")`, otherwise the broader rule would
+    shadow the login endpoint's public access
+  - Verified: `./mvnw compile clean` — BUILD SUCCESS
 
 ### Conductor Auth Service
 
