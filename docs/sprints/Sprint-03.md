@@ -96,28 +96,28 @@ payment flows (Sprint 5), Redis caching of routes/fare (Sprint 6), Flyway (defer
 
 ### Repositories
 
-- [ ] S3-05 — `RouteRepository.java` in `repository/` — extend
+- [x] S3-05 — `RouteRepository.java` in `repository/` — extend
   `JpaRepository<Route, UUID>`:
   - `Optional<Route> findByRouteNumber(String routeNumber)`
   - `List<Route> findByStatus(RouteStatus status)`
 
-- [ ] S3-06 — `RouteStopRepository.java` in `repository/` — extend
+- [x] S3-06 — `RouteStopRepository.java` in `repository/` — extend
   `JpaRepository<RouteStop, UUID>`:
   - `List<RouteStop> findByRouteIdOrderByStopSequenceAsc(UUID routeId)`
   - `Optional<RouteStop> findByRouteIdAndStopName(UUID routeId, String stopName)`
   - `List<RouteStop> findByRouteIdAndStopNameContainingIgnoreCaseOrderByStopSequenceAsc(UUID routeId, String search)`
   - `List<RouteStop> findByRouteIdAndStopSequenceGreaterThanOrderByStopSequenceAsc(UUID routeId, Integer sequence)`
 
-- [ ] S3-07 — `ConductorRepository.java` in `repository/` — extend
+- [x] S3-07 — `ConductorRepository.java` in `repository/` — extend
   `JpaRepository<Conductor, UUID>`:
   - `Optional<Conductor> findByEmail(String email)`
   - `Optional<Conductor> findByBusId(UUID busId)`
 
-- [ ] S3-08 — `BusRepository.java` in `repository/` — extend
+- [x] S3-08 — `BusRepository.java` in `repository/` — extend
   `JpaRepository<Bus, UUID>`:
   - `Optional<Bus> findByBusNumber(String busNumber)`
   - `List<Bus> findByRouteId(UUID routeId)`
-  - Verify all 4 repositories: `./mvnw compile clean`
+  - Verified all 4 repositories: `./mvnw compile clean` — BUILD SUCCESS
 
 ### DTOs
 
