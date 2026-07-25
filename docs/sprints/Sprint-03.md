@@ -224,7 +224,41 @@ payment flows (Sprint 5), Redis caching of routes/fare (Sprint 6), Flyway (defer
     first match wins — `/conductor/auth/login` permitAll is declared *before*
     `/conductor/**` → `hasRole("CONDUCTOR")`, otherwise the broader rule would
     shadow the login endpoint's public access
-  - Verified: `./mvnw compile clean` — BUILD SUCCESS
+  - **Known gap, deliberately deferred:** `/admin/**` → `hasRole("ADMIN")` is
+    permanently unreachable in Sprint 3 — no task in this sprint creates an
+    admin login/JWT-issuance path (no `AdminPrincipal`, no admin credentials).
+    Route 500K, its stops, the test bus, and the test conductor are all
+    created directly by `DataSeeder` (S3-29), not through the admin API.
+    Decided to ship the rule as planned rather than scope-expand this sprint
+    with a bare-bones admin auth flow — same pattern as Sprint 1 setting
+    `SessionCreationPolicy.STATELESS` before JWT existed. Real admin auth is
+    explicit future scope (Sprint 4+), not an oversight.
+  - **Gap found and fixed the same sprint:** role-mismatch requests (valid
+    JWT, wrong role) were falling through to Spring Security's default
+    `AccessDeniedHandler`, which does **not** go through the project's
+    `ApiResponse` envelope — every other error response in the API
+    (`GlobalExceptionHandler`, `JwtAuthenticationEntryPoint`) is wrapped, so
+    a bare 403 would have been the one inconsistent shape in the whole API.
+    The plan's own Postman check (S3-31) only asserts the status code, not
+    the body, so this wouldn't have failed verification — caught by
+    reasoning about consistency, not by a failing test. Fixed by adding
+    `JwtAccessDeniedHandler` (mirrors `JwtAuthenticationEntryPoint` exactly)
+    and wiring it via `.exceptionHandling(ex -> ex.authenticationEntryPoint(...)
+    .accessDeniedHandler(...))`. Verified live: registered a passenger,
+    hit `GET /admin/routes` with their token → `403
+    {"success":false,"message":"Access is denied","data":null}`; confirmed
+    the no-token 401 path (both `/admin/routes` and the existing Sprint 2
+    `/user/profile`) still returns the unchanged `JwtAuthenticationEntryPoint`
+    body.
+  - Also noticed (harmless): Spring logs
+    `Found 2 UserDetailsService beans ... Global Authentication Manager will
+    not use a UserDetailsService for username/password login` at startup —
+    expected, since neither `AuthServiceImpl.login()` nor the upcoming
+    `ConductorServiceImpl.login()` ever go through Spring's global
+    `AuthenticationManager`/`DaoAuthenticationProvider` (both call
+    `passwordEncoder.matches()` directly, per the Sprint 2 `login()` design)
+  - Verified: `./mvnw compile clean` — BUILD SUCCESS; app started clean
+    against live Postgres
 
 ### Conductor Auth Service
 
