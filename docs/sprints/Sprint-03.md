@@ -73,7 +73,7 @@ payment flows (Sprint 5), Redis caching of routes/fare (Sprint 6), Flyway (defer
     the live Postgres container; confirmed via `psql \d route_stop` — table
     created with both unique constraints present as btree indexes
 
-- [ ] S3-04 — Update `Ticket.java` in `entity/` — add fields:
+- [x] S3-04 — Update `Ticket.java` in `entity/` — add fields:
   - `stagesCrossed` (INTEGER, not null)
   - `adultCount` (INTEGER, not null, default 0)
   - `childCount` (INTEGER, not null, default 0)
@@ -82,9 +82,17 @@ payment flows (Sprint 5), Redis caching of routes/fare (Sprint 6), Flyway (defer
   - `childFare` (NUMERIC 12,2, not null)
   - `totalFare` (NUMERIC 12,2, not null)
   - Remove old `fare` field (rename → `totalFare`)
-  - Note: `ddl-auto=update` will add new columns but won't drop `fare` —
-    manually drop `fare` column in pgAdmin after verifying new columns exist
-  - Verify: app starts, new columns visible in pgAdmin
+  - `adultCount`/`childCount`/`infantCount` default via `@Builder.Default = 0`,
+    same pattern as `Wallet.balance` — Java-level default only, no DB-level
+    `@ColumnDefault` (consistent with the rest of the codebase)
+  - `ticket` table was empty (0 rows), so `ddl-auto=update` added all 7 new
+    NOT NULL columns cleanly with no backfill needed
+  - Note confirmed correct: `ddl-auto=update` did NOT drop `fare` — manually
+    ran `ALTER TABLE ticket DROP COLUMN fare;` via psql after verifying the
+    new columns existed
+  - Verified: `./mvnw compile clean` — BUILD SUCCESS; app started clean
+    against the live Postgres container; `psql \d ticket` confirms all 7 new
+    columns present and `fare` gone
 
 ### Repositories
 
