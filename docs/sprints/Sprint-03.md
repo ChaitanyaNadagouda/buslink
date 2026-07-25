@@ -57,7 +57,7 @@ payment flows (Sprint 5), Redis caching of routes/fare (Sprint 6), Flyway (defer
     this enum existing to compile at all, so the two were done together.
   - Verified: `./mvnw compile clean` — BUILD SUCCESS
 
-- [ ] S3-03 — Create `RouteStop.java` in `entity/` — new entity:
+- [x] S3-03 — Create `RouteStop.java` in `entity/` — new entity:
   - `routeStopId` (UUID, PK, generated)
   - `routeId` (UUID, plain FK — consistent with codebase pattern)
   - `stopName` (VARCHAR, not null)
@@ -66,8 +66,12 @@ payment flows (Sprint 5), Redis caching of routes/fare (Sprint 6), Flyway (defer
   - Extends `BaseEntity`
   - Table: `route_stop`
   - Unique constraints: `(route_id, stop_sequence)`, `(route_id, stop_name)`
-  - Indexes: `(route_id, stop_sequence)`, `(route_id, stop_name)`
-  - Verify: app starts, `route_stop` table created in pgAdmin
+  - Indexes: dropped as a separate declaration — a unique constraint already
+    creates its own backing btree index in Postgres, so a same-column `@Index`
+    would just duplicate it
+  - Verified: `./mvnw compile clean` — BUILD SUCCESS; app started clean against
+    the live Postgres container; confirmed via `psql \d route_stop` — table
+    created with both unique constraints present as btree indexes
 
 - [ ] S3-04 — Update `Ticket.java` in `entity/` — add fields:
   - `stagesCrossed` (INTEGER, not null)
