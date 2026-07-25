@@ -121,7 +121,7 @@ payment flows (Sprint 5), Redis caching of routes/fare (Sprint 6), Flyway (defer
 
 ### DTOs
 
-- [ ] S3-09 — Request DTOs in `dto/request/` (Java records):
+- [x] S3-09 — Request DTOs in `dto/request/` (Java records):
   - `CreateRouteRequestDTO` — routeNumber (@NotBlank), routeName (@NotBlank),
     farePerStage (@NotNull, @DecimalMin="0.1"), stops (List<CreateRouteStopDTO>)
   - `CreateRouteStopDTO` — stopName (@NotBlank), stopSequence (@NotNull, @Min=1),
@@ -129,8 +129,14 @@ payment flows (Sprint 5), Redis caching of routes/fare (Sprint 6), Flyway (defer
   - `CreateBusRequestDTO` — busNumber (@NotBlank), routeId (@NotNull)
   - `AssignConductorRequestDTO` — busId (@NotNull)
   - `ConductorLoginRequestDTO` — email (@NotBlank, @Email), password (@NotBlank)
+  - Added `@NotEmpty @Valid` on `CreateRouteRequestDTO.stops` beyond what the
+    plan specified — without `@Valid` on the nested list, `@NotBlank`/`@Min`
+    on each `CreateRouteStopDTO` element would never actually run (Bean
+    Validation doesn't cascade into collections automatically); `@NotEmpty`
+    rejects a route submitted with zero stops before it ever reaches the
+    service layer
 
-- [ ] S3-10 — Response DTOs in `dto/response/` (Java records):
+- [x] S3-10 — Response DTOs in `dto/response/` (Java records):
   - `RouteResponseDTO` — routeId, routeNumber, routeName, originStop,
     destinationStop, totalStops, farePerStage, status
   - `RouteStopResponseDTO` — routeStopId, stopName, stopSequence, stageNumber
@@ -141,7 +147,7 @@ payment flows (Sprint 5), Redis caching of routes/fare (Sprint 6), Flyway (defer
   - `ConductorResponseDTO` — conductorId, name, email, busId, status
   - `ConductorAuthResponseDTO` — accessToken, refreshToken, conductorId,
     name, email, busId, routeId (derived from bus)
-  - Verify: `./mvnw compile clean`
+  - Verified: `./mvnw compile clean` — BUILD SUCCESS
 
 ### Security — Role-Based
 
