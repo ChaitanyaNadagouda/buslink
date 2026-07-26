@@ -4,13 +4,13 @@
 Backend Foundation
 
 ## Active Sprint
-Sprint 2
+Sprint 3
 
 ## Sprint Status
-✅ Complete — awaiting Sprint 3 plan
+✅ Complete — awaiting Sprint 4 plan
 
 ## Active Sprint File
-docs/sprints/Sprint-02.md
+docs/sprints/Sprint-03.md
 
 ---
 

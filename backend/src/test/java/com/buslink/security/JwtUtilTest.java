@@ -2,7 +2,9 @@ package com.buslink.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.buslink.entity.Conductor;
 import com.buslink.entity.User;
+import com.buslink.enums.ConductorStatus;
 import io.jsonwebtoken.Claims;
 import java.util.Collections;
 import org.junit.jupiter.api.Test;
@@ -78,6 +80,26 @@ class JwtUtilTest {
 
         assertThat(jwtUtil.extractClaim(accessToken, (Claims c) -> c.get("type", String.class))).isEqualTo("access");
         assertThat(jwtUtil.extractClaim(refreshToken, (Claims c) -> c.get("type", String.class))).isEqualTo("refresh");
+    }
+
+    @Test
+    void extractRole_roundTrips_forPassengerAndConductorTokens() {
+        JwtUtil jwtUtil = new JwtUtil(TEST_SECRET, ONE_DAY_MS, ONE_DAY_MS);
+        User user = User.builder().email("rider@buslink.com").build();
+        Conductor conductor = Conductor.builder()
+                .email("conductor@buslink.com")
+                .status(ConductorStatus.ACTIVE)
+                .build();
+
+        String userAccessToken = jwtUtil.generateAccessToken(user);
+        String userRefreshToken = jwtUtil.generateRefreshToken(user);
+        String conductorAccessToken = jwtUtil.generateConductorAccessToken(conductor);
+        String conductorRefreshToken = jwtUtil.generateConductorRefreshToken(conductor);
+
+        assertThat(jwtUtil.extractRole(userAccessToken)).isEqualTo("PASSENGER");
+        assertThat(jwtUtil.extractRole(userRefreshToken)).isEqualTo("PASSENGER");
+        assertThat(jwtUtil.extractRole(conductorAccessToken)).isEqualTo("CONDUCTOR");
+        assertThat(jwtUtil.extractRole(conductorRefreshToken)).isEqualTo("CONDUCTOR");
     }
 
     private static UserDetails userDetailsFor(String email) {

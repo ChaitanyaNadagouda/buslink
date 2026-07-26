@@ -52,8 +52,29 @@ public class Ticket extends BaseEntity {
     @Column(nullable = false)
     private String destinationStop;
 
+    @Column(nullable = false)
+    private Integer stagesCrossed;
+
+    @Builder.Default
+    @Column(nullable = false)
+    private Integer adultCount = 0;
+
+    @Builder.Default
+    @Column(nullable = false)
+    private Integer childCount = 0;
+
+    @Builder.Default
+    @Column(nullable = false)
+    private Integer infantCount = 0;
+
     @Column(nullable = false, precision = 12, scale = 2)
-    private BigDecimal fare;
+    private BigDecimal adultFare;
+
+    @Column(nullable = false, precision = 12, scale = 2)
+    private BigDecimal childFare;
+
+    @Column(nullable = false, precision = 12, scale = 2)
+    private BigDecimal totalFare;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)

@@ -1,15 +1,12 @@
 package com.buslink.entity;
 
-import com.buslink.enums.RouteStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
-import jakarta.persistence.EnumType;
-import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
-import java.math.BigDecimal;
+import jakarta.persistence.UniqueConstraint;
 import java.util.UUID;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -19,39 +16,34 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 @Entity
-@Table(name = "route")
+@Table(
+        name = "route_stop",
+        uniqueConstraints = {
+            @UniqueConstraint(columnNames = {"route_id", "stop_sequence"}),
+            @UniqueConstraint(columnNames = {"route_id", "stop_name"})
+        })
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
 @EqualsAndHashCode(callSuper = false, onlyExplicitlyIncluded = true)
-public class Route extends BaseEntity {
+public class RouteStop extends BaseEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     @EqualsAndHashCode.Include
+    private UUID routeStopId;
+
+    @Column(nullable = false)
     private UUID routeId;
 
-    @Column(nullable = false, unique = true)
-    private String routeNumber;
-
-    @Column(nullable = false, unique = true)
-    private String routeName;
-
-    @Column(nullable = false, precision = 8, scale = 2)
-    private BigDecimal farePerStage;
+    @Column(nullable = false)
+    private String stopName;
 
     @Column(nullable = false)
-    private Integer totalStops;
+    private Integer stopSequence;
 
     @Column(nullable = false)
-    private String originStop;
-
-    @Column(nullable = false)
-    private String destinationStop;
-
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
-    private RouteStatus status;
+    private Integer stageNumber;
 }
