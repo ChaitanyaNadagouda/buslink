@@ -14,9 +14,9 @@ public interface RouteStopRepository extends JpaRepository<RouteStop, UUID> {
 
     Optional<RouteStop> findByRouteIdAndStopName(UUID routeId, String stopName);
 
-    List<RouteStop> findByRouteIdAndStopNameContainingIgnoreCaseOrderByStopSequenceAsc(
+    List<RouteStop> findByRouteIdAndStopNameStartingWithIgnoreCaseOrderByStopSequenceAsc(
             UUID routeId, String search);
 
-    List<RouteStop> findByRouteIdAndStopSequenceGreaterThanOrderByStopSequenceAsc(
-            UUID routeId, Integer sequence);
+    List<RouteStop> findByRouteIdAndStopSequenceGreaterThanAndStopNameStartingWithIgnoreCaseOrderByStopSequenceAsc(
+            UUID routeId, Integer sequence, String search);
 }
