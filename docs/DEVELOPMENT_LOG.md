@@ -203,3 +203,90 @@ Completed
   `route` is empty, so leaving manual data in place would have silently
   skipped it later.
 - S3-19 fully closed. Next: S3-20 (`RouteService` interface).
+
+## Route/Fare/Bus Service Layer & Controllers (2026-07-26)
+
+Completed
+
+- S3-20/S3-21: `RouteService`/`RouteServiceImpl` — `createRoute` (uniqueness
+  check, duplicate-stop validation, `@Transactional` route+stops save),
+  `getRouteById`/`getAllRoutes`, `updateRoute` (partial fare/status),
+  `deleteRoute` (soft delete via status flip — never hard delete, since
+  buses/tickets reference `routeId`). Gap-filled `UpdateRouteRequestDTO`
+  (S3-09 only created the create-side DTO).
+- S3-22/S3-23: `FareService`/`FareServiceImpl` — stop listing, prefix search,
+  forward-only search, and stage-based fare calculation
+  (`BigDecimal`/`RoundingMode.CEILING` on child fare).
+- **Bug found and fixed:** `RouteStopRepository`'s search method (S3-06) was
+  declared `findByRouteIdAndStopNameContainingIgnoreCaseOrderByStopSequenceAsc`
+  (substring match) instead of `StartingWith` (prefix match). Traced through
+  the planned Postman assertion for `search=H` (expects only 4 stops) against
+  all 29 seeded stop names and found 9 others contain an "h" mid-name (e.g.
+  `Banashankari`, `Jayadeva Hospital`) that `Containing` would have wrongly
+  matched. Renamed to `StartingWith`; added one new combined derived query
+  (`GreaterThan` + `StartingWith`) for the forward-search case, replacing an
+  unused sequence-only method.
+- S3-24/S3-25: `BusService`/`BusServiceImpl` — `createBus` (uniqueness +
+  route-existence checks), `getAllBuses`, `getBusByBusId`. Accepted a known
+  N+1 `Route` lookup per bus in `getAllBuses` given the domain's real fleet
+  size (a handful of buses per route).
+- S3-26/S3-27/S3-28: `AdminRouteController`, `AdminBusController`,
+  `RouteController`. Along the way, found `RouteService`/`RouteServiceImpl`
+  had no method backing S3-26's "add stop to an existing route" endpoint —
+  added `addStop(UUID, CreateRouteStopDTO)`: append-only (`stopSequence`
+  must equal `totalStops + 1`), plus a stage-consistency check (new stop's
+  `stageNumber` must be `>=` the current last stop's) caught during design
+  review — `stopSequence` alone only proves the new stop claims the next
+  ordinal slot, not that it's geographically last; a lower `stageNumber`
+  means the stop belongs in the middle of the route, which would need
+  renumbering everything after it (out of scope for this endpoint).
+  `RouteController`'s single `/stops` endpoint branches on which optional
+  query params (`search`, `after`) are present, since all three stop-listing
+  behaviors share one path.
+- Verified throughout: `./mvnw compile clean` after each addition, plus full
+  app boots against live Postgres to confirm Spring Data parses every new/
+  renamed derived query method without a `PropertyReferenceException`
+  (compile success alone can't catch that class of failure).
+- Next: S3-29 (`DataSeeder`).
+
+## Seed Data, Unit Tests, Postman Verification (2026-07-26)
+
+Completed
+
+- S3-29: `DataSeeder` (`@Component`, `ApplicationRunner`) seeds Route 500K,
+  all 29 stops, 1 test bus, 1 test conductor — guarded by
+  `routeRepository.count() > 0`. Verified both that seeding produces exactly
+  the specified data (route fields, all 29 stops spot-checked at both ends,
+  bus, conductor) and that a second app restart against the now-populated DB
+  does *not* reseed (row counts unchanged) — confirming the guard actually
+  prevents re-seeding, not just that it worked once.
+- S3-30: `FareServiceImplTest` (5 tests, exactly as specified) and
+  `RouteServiceImplTest` (8 tests). The latter was added beyond the
+  original task text — Scope listed `RouteServiceImplTest` but neither a
+  task number nor a Definition of Done line existed for it; confirmed with
+  the user and added it here rather than leave a declared-in-scope item
+  quietly unfulfilled. `RouteServiceImplTest` includes a dedicated
+  `addStop_lowerStageNumber_throwsValidation` test directly exercising the
+  stage-consistency bug caught during S3-26's design review.
+- Verified: `./mvnw test -Dtest=FareServiceImplTest,RouteServiceImplTest` —
+  13/13 pass; full `./mvnw test` — 26/26 pass (including
+  `BusLinkApplicationTests.contextLoads`, which needs
+  `infrastructure/.env` sourced into the same shell running Maven).
+- S3-31: added `Conductor Auth`, `Route`, `Fare` folders to the Postman
+  collection (plus an `Admin` folder, not in the original named-folder list,
+  to cover the no-token-on-`/admin/**` check the DoD requires) — every new
+  request has a test script asserting the expected result, same pattern as
+  the existing passenger `Auth > Login`. Verified end-to-end in Postman
+  Desktop against the live seeded data: conductor login (tokens +
+  non-null `routeId`), all 29 stops in sequence order, exact stop-name
+  matches for both search variants, correct fare calculation
+  (`stagesCrossed=6`, `totalFare=90.00`), `403` for a passenger token on a
+  conductor endpoint, `401` for no token on `/admin/routes` — all passed.
+- **Sprint 3 declared complete (2026-07-26).** All Definition of Done items
+  verified individually: `route`/`route_stop`/`ticket` schema changes
+  confirmed, conductor login returning tokens with non-null `routeId`, all
+  stop/fare Postman checks passing against the seeded Route 500K,
+  `ROLE_PASSENGER` correctly rejected (`403`) on conductor endpoints,
+  no-token `/admin/**` correctly rejected (`401`), all 13 unit tests
+  passing, all Postman assertions passing. `feature/route-fare-conductor-auth`
+  to be merged into `dev` next (S3-32).

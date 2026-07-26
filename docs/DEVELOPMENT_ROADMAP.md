@@ -7,7 +7,7 @@ Backend Foundation
 Sprint 3
 
 ## Sprint Status
-🚧 In progress — on `feature/route-fare-conductor-auth`
+✅ Complete — awaiting Sprint 4 plan
 
 ## Active Sprint File
 docs/sprints/Sprint-03.md

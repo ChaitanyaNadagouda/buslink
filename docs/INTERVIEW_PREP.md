@@ -244,3 +244,213 @@ A: Nothing under test needs Spring wiring — `AuthServiceImpl`'s logic sits beh
 
 **Q: How do you unit-test a method that calls `repository.save()` and then reads the ID Hibernate would generate, without a real database?**
 A: Stub `save()` with Mockito's `thenAnswer` to mutate and return the same entity instance passed in, setting a fixed UUID before returning — mirrors real Hibernate behavior for `GenerationType.UUID`, where the ID is generated client-side *before* the insert, unlike an auto-increment `IDENTITY` strategy.
+
+---
+
+## Sprint 3
+
+### Spring Data JPA
+
+**Q: `RouteRepository extends JpaRepository<Route, UUID>` gives you `save()`/`findById()`/`findAll()` for free — where's the class that actually implements them?**
+A: There isn't one in the source tree. `JpaRepository` is a chain of interfaces (`JpaRepository` → `PagingAndSortingRepository` → `CrudRepository`), and `save`/`findById`/etc. are just abstract method signatures declared there. At application startup, Spring Data scans for interfaces extending `JpaRepository` and generates a proxy implementation for each one at runtime (`SimpleJpaRepository`, wrapped in a JDK dynamic proxy) — that generated object is what gets injected wherever you ask for `RouteRepository`. Declaring the interface extension is a contract, not a copy-paste of code; Spring fulfills the contract with an object you never see the source of.
+
+**Q: What's the actual difference between the Spring Data keywords `Containing` and `StartingWith` in a derived query method name, and why did mixing them up matter here?**
+A: `Containing` compiles to `LIKE %x%` (substring anywhere); `StartingWith` compiles to `LIKE x%` (prefix only). A stop-search method declared with `Containing` when the actual requirement was a prefix match (`search=H` should return only stops *starting* with H) silently over-matched — 9 of 29 seeded stops contain an "h" mid-name (`Banashankari`, `Jayadeva Hospital`, `Marathahalli Bridge`, ...) that would have wrongly appeared in results. Caught by tracing the planned Postman assertions against the actual seed data before wiring the service layer to it, not by a failing test (none existed yet at that point).
+
+**Q: Why does a malformed derived query method name (e.g. a typo'd property name) fail at Spring Boot *startup* rather than at compile time?**
+A: The method name is just a `String` to `javac` — it compiles fine regardless of whether `RouteId`/`StopName`/etc. are real entity properties. Spring Data only *parses* the method name into a query (via `PropertyReferenceException` if it can't resolve a property) when it builds the repository proxy, which happens during `ApplicationContext` refresh at startup. This is why `./mvnw compile clean` passing doesn't prove a new/renamed derived query method actually works — only booting the app (or a `@DataJpaTest`) exercises that parsing step.
+
+### Security
+
+**Q: Walk through what happens end-to-end when a conductor logs in.**
+A:
+```
+ POST /conductor/auth/login  { email, password }
+              │
+              ▼
+ ConductorServiceImpl.login()
+   1. conductorRepository.findByEmail(email)
+        not found? ──► ValidationException("Invalid email or password")
+   2. passwordEncoder.matches(rawPassword, conductor.passwordHash)   [BCrypt]
+        wrong?     ──► same generic ValidationException  (no enumeration)
+   3. conductor.status == ACTIVE ?
+        no?        ──► ValidationException("Account is not active")
+   4. conductor.busId != null ?
+        no?        ──► ValidationException("Conductor is not assigned to a bus")
+   5. busRepository.findById(busId)  → resolves routeId
+              │
+              ▼
+ JwtUtil.generateConductorAccessToken() / generateConductorRefreshToken()
+   - embeds  role: "CONDUCTOR"  claim in both tokens
+              │
+              ▼
+ 200 OK  { accessToken, refreshToken, conductorId, name, email, busId, routeId }
+```
+Same generic-error pattern as passenger login (Sprint 2) for steps 1–3 — an
+attacker probing `/conductor/auth/login` can't distinguish "no such email"
+from "wrong password" from "account disabled." Step 4 is a guard not in the
+original plan: `Conductor.busId` is nullable in the schema, so "conductor
+exists but isn't assigned a bus yet" is a real reachable state — without the
+check, `busRepository.findById(null)` would surface as an unhelpful 500
+instead of a clear 400.
+
+**Q: Adding `ROLE_CONDUCTOR` as a second role required a second `UserDetailsService` bean (`ConductorDetailsServiceImpl` alongside `UserDetailsServiceImpl`) — what broke, and how was it resolved?**
+A: Spring logs `Found 2 UserDetailsService beans ... Global Authentication Manager will not use a UserDetailsService for username/password login` — harmless here since neither `AuthServiceImpl.login()` nor `ConductorServiceImpl.login()` go through Spring's global `AuthenticationManager` (both call `passwordEncoder.matches()` directly). The real problem was in `JwtAuthenticationFilter`: injecting by the shared `UserDetailsService` *interface* type gives Spring two ambiguous candidates for one field (`NoUniqueBeanDefinitionException` at startup). Resolved by injecting both concrete classes directly — `@Qualifier` was the alternative, rejected as unnecessary ceremony for exactly two fixed, known implementations.
+
+**Q: A role-mismatch request (valid JWT, wrong role) returned a bare `403` that bypassed the project's `ApiResponse` envelope — what was different from Sprint 2's missing-`401` bug, and how was each fixed?**
+A: Two different Spring Security extension points, for two different failure modes. `AuthenticationEntryPoint` (Sprint 2's `JwtAuthenticationEntryPoint`) handles "not authenticated at all" → `401`. `AccessDeniedHandler` handles "authenticated, but not allowed" → `403` — Spring Security's *default* `AccessDeniedHandler` doesn't wrap the response in the app's `ApiResponse` shape, so it was the one inconsistent error format in the whole API. Fixed by adding `JwtAccessDeniedHandler` (mirrors `JwtAuthenticationEntryPoint` exactly) and wiring both: `.exceptionHandling(ex -> ex.authenticationEntryPoint(...).accessDeniedHandler(...))`.
+
+**Q: How does `JwtAuthenticationFilter` decide whether to load a `UserPrincipal` or a `ConductorPrincipal` for a given token?**
+A: `JwtUtil` bakes a `role` claim into every token at issuance (`generateAccessToken` for passengers vs `generateConductorAccessToken` for conductors — role is baked into *which method is called*, not passed as a raw string parameter, so a caller can't accidentally issue the wrong role for a given principal type). The filter extracts that claim and routes to the matching `UserDetailsService`. A token missing the claim entirely (any token issued before this existed) falls through to the passenger path — preserves backward compatibility with already-issued tokens rather than rejecting them.
+
+**Q: Full request lifecycle for Sprint 3 — extend Sprint 2's filter-chain diagram to show where role-routing and the two failure modes (401 vs 403) actually happen.**
+A:
+```
+ HTTP Request  (Authorization: Bearer <jwt>, or none)
+              │
+              ▼
+ JwtAuthenticationFilter
+   - reads Authorization header (no header → skip, stays unauthenticated)
+   - validates signature + expiry
+   - extractRole(token) → "PASSENGER" | "CONDUCTOR" | (missing → defaults PASSENGER)
+              │
+       ┌──────┴──────┐
+       │             │
+  "PASSENGER"    "CONDUCTOR"
+       │             │
+       ▼             ▼
+ UserDetailsServiceImpl   ConductorDetailsServiceImpl
+       │             │
+       ▼             ▼
+ UserPrincipal    ConductorPrincipal        → populates SecurityContextHolder
+ (ROLE_PASSENGER)  (ROLE_CONDUCTOR)
+              │
+              ▼
+ AuthorizationFilter — evaluates SecurityConfig.authorizeHttpRequests()
+   /admin/**            → hasRole(ADMIN)
+   /conductor/**         → hasRole(CONDUCTOR)   (except /conductor/auth/login → permitAll)
+   /routes/*/stops,/fare → hasRole(CONDUCTOR)
+   everything else       → authenticated
+              │
+     ┌────────┼─────────────────┐
+     │        │                 │
+ no/invalid  valid token,    authorized
+ token       wrong role          │
+     │        │                 ▼
+     ▼        ▼           DispatcherServlet → Controller
+ JwtAuthentication  JwtAccessDeniedHandler
+ EntryPoint         .handle() → 403
+ .commence() → 401  {success:false,
+ {success:false,     message:"Access is denied",
+  message:...,       data:null}
+  data:null}
+```
+The two handlers are easy to conflate but answer different questions:
+`AuthenticationEntryPoint` = "I don't know who you are" (`401`);
+`AccessDeniedHandler` = "I know who you are, but you can't do this" (`403`).
+Both had to be wired to keep every error response in the same `ApiResponse`
+envelope — Spring Security's *default* handler for the second case doesn't
+know about `ApiResponse` at all.
+
+### Domain Modeling & Denormalization
+
+**Q: `Route.totalStops`/`destinationStop` are denormalized (computable from `RouteStop`, but stored directly on `Route`) — what's the real cost of that choice?**
+A: The benefit is cheap reads — `GET /admin/routes` doesn't need a join/count query per route. The real cost, and the thing worth knowing for an interview: denormalized fields must be updated by *every* write path that touches the source data, or they silently go stale. `createRoute` sets them once from the full stop list; `addStop` — added later, once a "add one stop to an existing route" endpoint existed — had to remember to bump `totalStops` and overwrite `destinationStop` too, or the fields would drift out of sync the first time a stop was added outside of route creation.
+
+**Q: Why is adding a stop to an existing route restricted to append-only (`stopSequence` must equal the current `totalStops + 1`) instead of allowing insertion at any position?**
+A: A route is a physically ordered line of stops. Inserting into the middle would mean renumbering every `stopSequence` (and often `stageNumber`) after the insertion point — a structural operation this endpoint was never scoped to do. Appending past the current end is the realistic real-world operation (a transit authority extending a route by one more stop), so the validation deliberately narrows to that case rather than attempting general reordering.
+
+**Q: `stopSequence` and `stageNumber` on `RouteStop` look similar — what's actually different about them, and why do you need both?**
+A: `stopSequence` is a pure ordinal (1, 2, 3, ... — physical position along the route, always unique per route). `stageNumber` is the fare-grouping a stop belongs to — multiple physical stops can share one stage (the seeded data has 2 stops per stage almost throughout). Fare calculation (`stagesCrossed = destStage - originStage + 1`) needs `stageNumber`; ordering/appending logic needs `stopSequence`. Conflating them would make it impossible to model "two stops close together that cost the same fare to cross between."
+
+**Q: A stop submitted with the correct next `stopSequence` but a `stageNumber` *lower* than the route's current last stop was still wrong — why, given the sequence check already passed?**
+A: `stopSequence` only proves the new stop claims the next available ordinal slot — it says nothing about whether that slot is geographically last. A lower `stageNumber` than the current last stop means the new stop actually belongs somewhere in the *middle* of the route's fare progression, not at the end — same renumbering problem as inserting mid-sequence, just disguised by a technically-valid sequence number. Caught by reasoning about what the fields actually represent, not by a failing test (none existed for this case until it was found).
+
+**Q: Walk through `addStop`'s full validation flow — what has to be true for a stop to actually get appended?**
+A:
+```
+ POST /admin/routes/{routeId}/stops  { stopName, stopSequence, stageNumber }
+              │
+              ▼
+ routeRepository.findById(routeId)
+    not found?                          ──► ResourceNotFoundException (404)
+              │
+              ▼
+ routeStopRepository.findByRouteIdAndStopName(routeId, stopName)
+    already exists?                     ──► ConflictException (409)
+              │
+              ▼
+ stopSequence == route.totalStops + 1 ?
+    no  (gap, or not the next slot)     ──► ValidationException (400)
+              │ yes
+              ▼
+ stageNumber >= currentLastStop.stageNumber ?
+    no  (belongs mid-route, would need
+         renumbering everything after)  ──► ValidationException (400)
+              │ yes (same stage extends it, higher stage starts a new one)
+              ▼
+ save RouteStop
+ route.totalStops += 1
+ route.destinationStop = stopName        ← denormalized fields kept in sync
+              │
+              ▼
+ 200 OK  RouteStopResponseDTO
+```
+Four independent guards, each catching a different way the request could be
+structurally wrong — worth walking through in order during an interview
+since each one maps to a concrete failure mode that was reasoned through
+rather than assumed away (see the two Q&As above for *why* the sequence
+check alone isn't sufficient).
+
+**Q: Walk through `calculateFare` end-to-end, with a worked example.**
+A:
+```
+ GET /routes/{routeId}/fare?origin=HSR Layout&destination=KR Puram Railway Station
+                            &adults=2&children=1&infants=1
+              │
+              ▼
+ routeStopRepository.findByRouteIdAndStopName(routeId, origin)
+    not found?                          ──► ResourceNotFoundException (404)
+ routeStopRepository.findByRouteIdAndStopName(routeId, destination)
+    not found?                          ──► ResourceNotFoundException (404)
+              │
+              ▼
+ destination.stopSequence > origin.stopSequence ?
+    no                                  ──► ValidationException
+                                             ("Destination must be after origin")
+              │ yes
+              ▼
+ routeRepository.findById(routeId)  → route.farePerStage
+              │
+              ▼
+ stagesCrossed = (destination.stageNumber - origin.stageNumber) + 1
+ adultFare     = stagesCrossed × farePerStage
+ childFare     = adultFare / 2              (RoundingMode.CEILING, scale 2)
+ infantFare    = 0
+ totalFare     = adults × adultFare + children × childFare
+              │
+              ▼
+ 200 OK  FareResponseDTO
+
+ Worked example — HSR Layout (stage 5) → KR Puram Railway Station (stage 10),
+ farePerStage = 6.00, 2 adults + 1 child + 1 infant:
+   stagesCrossed = (10 - 5) + 1 = 6
+   adultFare     = 6 × 6.00     = 36.00
+   childFare     = 36.00 / 2    = 18.00
+   totalFare     = 2×36.00 + 1×18.00 = 90.00   (infant contributes 0)
+```
+
+### API Design
+
+**Q: Why does `GET /routes/{routeId}/stops` handle three different behaviors (full list / prefix search / forward search) on one path instead of three separate endpoints?**
+A: Matches how the sprint's plan grouped them — all three are "give the conductor a stop list," differentiated only by which optional query params (`search`, `after`) are present. The controller branches on presence/absence of those params rather than dispatching to three URLs. Trade-off: one endpoint to secure/document/test instead of three, at the cost of a less RESTfully "pure" single-responsibility-per-URL shape — judged acceptable since the three behaviors are genuinely one concept (stop listing) with optional narrowing, not three unrelated resources.
+
+### Testing Strategy
+
+**Q: `RouteServiceImplTest` wasn't in the sprint's original task list or Definition of Done — why did it get built anyway?**
+A: The sprint's own **Scope** section (drafted before the detailed task list) named both `FareServiceImplTest` and `RouteServiceImplTest` as in-scope unit tests, but only `FareServiceImplTest` made it into an actual task number and DoD line — an inconsistency between the high-level scope and the detailed checklist that's easy to miss if you only ever check the task list. Caught by comparing Scope against Tasks/DoD directly, confirmed with the project owner, and closed rather than left as a silently-unfulfilled scope line.
+
+### Offline-First Design
+
+**Q: If the conductor app is meant to cache the full stop list locally at login (per this project's offline-first design goal), why do `searchStops`/`searchStopsAfter` exist as separate backend endpoints instead of the client just filtering its own cache?**
+A: They're the server-side source of truth the client's local cache gets built from, and the only way to verify the search/filter behavior at all before a real client exists (Postman exercises them directly). They aren't meant to be called per-keystroke by a well-built offline-capable client — a bus can lose connectivity mid-route, so the real destination-dropdown experience should filter the already-cached ~29 stops entirely client-side, not round-trip to the server on every character typed. At this route's actual scale (≤29 rows, indexed columns), even a naive per-keystroke caller wouldn't stress the backend — the real reason to avoid it is network reliability on a moving bus, not server load.
