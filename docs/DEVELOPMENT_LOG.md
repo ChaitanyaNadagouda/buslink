@@ -170,3 +170,36 @@ Completed
   400→409), Swagger UI still reachable, all 5 Postman requests passing, all 5
   `AuthServiceImplTest` unit tests passing, `feature/auth` merged into `dev` with
   a clean build.
+
+---
+
+# Sprint 3
+
+## S3-19 Live Verification Closure (2026-07-26)
+
+Completed
+
+- S3-01 through S3-18 (Route/RouteStop/Ticket entity updates, 4 repositories,
+  all request/response DTOs, role-based security including `JwtAccessDeniedHandler`,
+  and `ConductorServiceImpl`/`ConductorController`) were already implemented
+  and compile-verified — see `docs/sprints/Sprint-03.md` for full detail on
+  each, including the two gaps caught and fixed mid-sprint (403 responses
+  bypassing `ApiResponse`, and `/admin/**` being deliberately unreachable
+  pending real admin auth).
+- S3-19's live end-to-end verification (login → profile) had been blocked by
+  the local Docker daemon hanging mid-attempt, with no test data written.
+  Closed out this session: confirmed Docker responsive again (`docker ps`
+  clean), inserted a temporary manual seed via `psql` (1 Route "500K", 1 Bus
+  "KA-01-F-1234", 1 Conductor `conductor@buslink.com` / BCrypt("Test@1234")) —
+  matching S3-29's planned `DataSeeder` shape exactly, since that seeder
+  doesn't exist yet.
+- Ran the app locally (`./mvnw spring-boot:run`) against the live Postgres
+  container and verified with `curl`: `POST /conductor/auth/login` → `200`
+  with access/refresh tokens and correctly populated `busId`/`routeId`;
+  `GET /conductor/profile` (Bearer token) → `200` with correct conductor
+  data; same endpoint with no token → `401` via `JwtAuthenticationEntryPoint`.
+- Stopped the app and deleted the temporary route/bus/conductor rows
+  afterward so `route` stays empty — `DataSeeder` (S3-29) only seeds when
+  `route` is empty, so leaving manual data in place would have silently
+  skipped it later.
+- S3-19 fully closed. Next: S3-20 (`RouteService` interface).

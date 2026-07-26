@@ -105,8 +105,27 @@ payment flows (Sprint 5), Redis caching of routes/fare (Sprint 6), Flyway (defer
   `JpaRepository<RouteStop, UUID>`:
   - `List<RouteStop> findByRouteIdOrderByStopSequenceAsc(UUID routeId)`
   - `Optional<RouteStop> findByRouteIdAndStopName(UUID routeId, String stopName)`
-  - `List<RouteStop> findByRouteIdAndStopNameContainingIgnoreCaseOrderByStopSequenceAsc(UUID routeId, String search)`
-  - `List<RouteStop> findByRouteIdAndStopSequenceGreaterThanOrderByStopSequenceAsc(UUID routeId, Integer sequence)`
+  - `List<RouteStop> findByRouteIdAndStopNameStartingWithIgnoreCaseOrderByStopSequenceAsc(UUID routeId, String search)`
+  - `List<RouteStop> findByRouteIdAndStopSequenceGreaterThanAndStopNameStartingWithIgnoreCaseOrderByStopSequenceAsc(UUID routeId, Integer sequence, String search)`
+  - **Bug found and fixed during S3-23 (2026-07-26):** originally declared with
+    `...ContainingIgnoreCase...` (substring-anywhere match) instead of
+    `...StartingWithIgnoreCase...` (prefix match). Traced through the S3-31
+    Postman expectations for `search=H` (expects only HBR/HSR/Hebbal/Hennur)
+    and found 9 other seeded stops contain an "h" mid-name (e.g.
+    `Banashankari`, `Jayadeva Hospital`, `Marathahalli Bridge`) that
+    `Containing` would have wrongly matched. Renamed to `StartingWith`, which
+    produces exactly the expected 4. Also replaced the sequence-only
+    `findByRouteIdAndStopSequenceGreaterThanOrderByStopSequenceAsc` (never
+    called by anything) with a single combined derived query doing both the
+    sequence-forward and name-prefix filtering at the DB level, for
+    `searchStopsAfter` (S3-23) — keeps filtering consistent with every other
+    stop lookup (pushed down to the repository) rather than fetching broad
+    and filtering in the service.
+  - Verified: `./mvnw compile clean` — BUILD SUCCESS; also booted the app
+    (`./mvnw spring-boot:run`, live Postgres) to confirm Spring Data parses
+    both the renamed and new derived query names without a
+    `PropertyReferenceException` — `compile clean` alone can't catch that
+    class of failure, only a context boot can.
 
 - [x] S3-07 — `ConductorRepository.java` in `repository/` — extend
   `JpaRepository<Conductor, UUID>`:
@@ -292,110 +311,197 @@ payment flows (Sprint 5), Redis caching of routes/fare (Sprint 6), Flyway (defer
   - `GET /conductor/profile` → `ConductorServiceImpl.getConductorProfile()`
     → `ApiResponse<ConductorResponseDTO>` (ROLE_CONDUCTOR)
   - Verified: `./mvnw compile clean` — BUILD SUCCESS
-  - **Live end-to-end verification (login → profile against a running app +
-    real Postgres) is still pending** — blocked mid-attempt by the local
-    Docker daemon becoming unresponsive (`docker version`/`docker ps`/`docker
-    exec` all timing out with the socket present but nothing answering
-    behind it). No test data was written before the hang (the insert never
-    completed). Committing on compile-verification alone per explicit
-    instruction; live verification to follow once Docker is confirmed
-    responsive again.
+  - **Live end-to-end verification closed (2026-07-26):** Docker daemon
+    confirmed responsive again. Inserted a temporary manual seed (1 Route
+    "500K", 1 Bus "KA-01-F-1234", 1 Conductor `conductor@buslink.com` /
+    BCrypt("Test@1234")) directly via `psql` — no `DataSeeder` (S3-29) exists
+    yet, and this data matches its planned shape exactly. Ran the app
+    (`./mvnw spring-boot:run` against the live Postgres container) and
+    verified with `curl`:
+    - `POST /conductor/auth/login` → `200`, access + refresh tokens returned,
+      `busId` and `routeId` both correctly populated in the response
+    - `GET /conductor/profile` (Bearer token) → `200`, correct conductor data
+    - `GET /conductor/profile` (no token) → `401` (via `JwtAuthenticationEntryPoint`)
+    - App stopped and the temporary route/bus/conductor rows deleted
+      afterward, so `route` stays empty for S3-29's `DataSeeder` (which only
+      seeds when `route` is empty) to run cleanly on its own later.
 
 ### Route Service
 
-- [ ] S3-20 — Create `RouteService.java` interface in `service/`
-- [ ] S3-21 — Create `RouteServiceImpl.java` in `service/impl/`:
+- [x] S3-20 — Create `RouteService.java` interface in `service/`:
+  - `createRoute(CreateRouteRequestDTO)`, `getRouteById(UUID)`,
+    `getAllRoutes()`, `updateRoute(UUID, UpdateRouteRequestDTO)`,
+    `deleteRoute(UUID)`
+  - Gap found: no DTO existed yet for the fare/status-only partial update
+    `updateRoute` needs (S3-09 only created `CreateRouteRequestDTO`). Created
+    `UpdateRouteRequestDTO` (`dto/request/`) — `farePerStage` (`@DecimalMin`,
+    nullable) and `status` (nullable), both optional since it's a partial
+    update; Bean Validation constraints skip null values, so `@DecimalMin`
+    only fires when a fare is actually supplied.
+  - Verified: `./mvnw compile` — BUILD SUCCESS
+- [x] S3-21 — Create `RouteServiceImpl.java` in `service/impl/`:
   - `createRoute(CreateRouteRequestDTO)`:
-    1. Check `routeNumber` uniqueness — throw `ConflictException` if duplicate
-    2. Save `Route` — derive `originStop` from first stop in list,
-       `destinationStop` from last, `totalStops` from list size,
-       `status` = ACTIVE
-    3. Save all `RouteStop` rows in order — validate no duplicate
-       `stopSequence` or `stopName` in the same request
-    4. Return `RouteResponseDTO`
-    5. `@Transactional` — Route + all stops succeed or fail together
-  - `getRouteById(UUID routeId)` → throw `ResourceNotFoundException` if absent
+    1. Check `routeNumber` uniqueness — throws `ConflictException` if duplicate
+    2. Validates no duplicate `stopSequence` or `stopName` within the request
+       (`ValidationException` — a malformed request, not a conflict with
+       existing DB state, so it follows the Sprint 2 `ValidationException`
+       precedent rather than `ConflictException`)
+    3. Saves `Route` — `originStop`/`destinationStop` derived from the first/
+       last stop in the submitted list (as literally specified), `totalStops`
+       from list size, `status` = ACTIVE
+    4. Saves all `RouteStop` rows via `saveAll`
+    5. Returns `RouteResponseDTO`
+    6. `@Transactional` — Route + all stops succeed or fail together
+  - `getRouteById(UUID routeId)` → throws `ResourceNotFoundException` if absent
   - `getAllRoutes()` → list of `RouteResponseDTO`
-  - `updateRoute(UUID routeId, ...)` → update fare/status only
-    (stop changes handled separately via stop endpoints)
-  - `deleteRoute(UUID routeId)` → soft delete: set status = INACTIVE
+  - `updateRoute(UUID routeId, UpdateRouteRequestDTO)` — updates `farePerStage`
+    and/or `status` only where non-null (partial update; stop changes handled
+    separately via stop endpoints)
+  - `deleteRoute(UUID routeId)` → soft delete: sets status = INACTIVE
     (never hard delete — tickets reference routeId)
-  - Verify: `./mvnw compile clean`
+  - Manual DTO↔entity mapping (no MapStruct mapper yet), same pattern as
+    `ConductorServiceImpl` — private `toResponseDTO` helper, no separate
+    `mapper/` class for a single-direction 8-field mapping this simple
+  - Verified: `./mvnw compile clean` — BUILD SUCCESS
+  - **Gap found and fixed during S3-26 (2026-07-26):** `addStop(UUID routeId,
+    CreateRouteStopDTO request)` added — S3-26's "add stop to an existing
+    route" endpoint had no backing service method anywhere in S3-20/21's
+    original scope. Behavior:
+    1. Route must exist (`ResourceNotFoundException`); no existing stop with
+       the same name on the route (`ConflictException`)
+    2. **Append-only**: `stopSequence` must equal `route.totalStops + 1`
+       (`ValidationException` otherwise) — a route is a physically ordered
+       line of stops, and inserting into the middle would require renumbering
+       every stop after it, which this endpoint was never scoped to do
+    3. **Stage-consistency check** (caught during design review, not in the
+       original plan): the new stop's `stageNumber` must be `>=` the current
+       last stop's `stageNumber`. `stopSequence` alone only proves the new
+       stop claims the next ordinal slot — it says nothing about whether it's
+       geographically last. A stop submitted with a lower `stageNumber` than
+       the current last stop is meant to sit in the *middle* of the route
+       (same renumbering problem as above), not at the end, even though its
+       `stopSequence` would pass check #2. Same-stage appends are allowed
+       (matches the seeded 2-stops-per-stage pattern); only a strictly lower
+       stage is rejected (`ValidationException`).
+    4. On success, updates the denormalized `Route.totalStops` (+1) and
+       `Route.destinationStop` (to the new stop's name) — both would silently
+       drift stale otherwise, since `createRoute` is no longer the only path
+       that can add a `RouteStop`.
+    - Verified: `./mvnw compile clean` — BUILD SUCCESS
 
 ### RouteStop Service (Fare Engine)
 
-- [ ] S3-22 — Create `FareService.java` interface in `service/`
-- [ ] S3-23 — Create `FareServiceImpl.java` in `service/impl/`:
+- [x] S3-22 — Create `FareService.java` interface in `service/`:
+  - `getStopsForRoute`, `searchStops`, `searchStopsAfter`, `calculateFare` —
+    signatures matching S3-23 below
+
+- [x] S3-23 — Create `FareServiceImpl.java` in `service/impl/`:
   - `getStopsForRoute(UUID routeId)`:
     → `List<RouteStopResponseDTO>` ordered by `stopSequence` ASC
     → Used by conductor app at login to cache full stop list for offline use
   - `searchStops(UUID routeId, String search)`:
-    → All stops on route where `stopName ILIKE search%`
+    → All stops on route where `stopName` starts with `search` (prefix,
+      case-insensitive) — see the S3-06 fix note above
     → Used for origin dropdown (all stops on route)
   - `searchStopsAfter(UUID routeId, String originStop, String search)`:
-    1. Find origin's `stopSequence`
-    2. Find all stops with `stopSequence > originSequence` AND name matches search
+    1. Look up origin's `RouteStop` via `findByRouteIdAndStopName` →
+       `ResourceNotFoundException` if absent
+    2. Single combined derived query: `stopSequence > origin.stopSequence`
+       AND name starts with `search`
     → Used for destination dropdown (only stops after origin)
   - `calculateFare(UUID routeId, String originStop, String destinationStop,
     int adults, int children, int infants)`:
-    1. Fetch origin `RouteStop` → throw `ResourceNotFoundException` if not found
-    2. Fetch destination `RouteStop` → throw `ResourceNotFoundException` if not found
-    3. Validate destination sequence > origin sequence
-       → throw `ValidationException("Destination must be after origin")` if not
+    1. Fetch origin `RouteStop` → `ResourceNotFoundException` if not found
+    2. Fetch destination `RouteStop` → `ResourceNotFoundException` if not found
+    3. Validate destination sequence > origin sequence →
+       `ValidationException("Destination must be after origin")` if not
     4. `stagesCrossed = (destStage - originStage) + 1`
-    5. `adultFare = stagesCrossed × route.farePerStage`
-    6. `childFare = adultFare / 2` (ceiling, `RoundingMode.CEILING`)
-    7. `infantFare = 0`
+    5. `adultFare = stagesCrossed × route.farePerStage` (`route` fetched via
+       `RouteRepository.findById`)
+    6. `childFare = adultFare / 2`, `BigDecimal.divide(2, 2, RoundingMode.CEILING)`
+    7. `infantFare = BigDecimal.ZERO`
     8. `totalFare = (adults × adultFare) + (children × childFare)`
-    9. Return `FareResponseDTO`
-  - Verify: `./mvnw compile clean`
+    9. Returns `FareResponseDTO`
+  - Manual DTO↔entity mapping (no MapStruct), same pattern as
+    `RouteServiceImpl`/`ConductorServiceImpl`
+  - Verified: `./mvnw compile clean` — BUILD SUCCESS; app boot confirmed no
+    derived-query parsing errors (see S3-06 note)
 
 ### Admin — Bus Service
 
-- [ ] S3-24 — Create `BusService.java` interface in `service/`
-- [ ] S3-25 — Create `BusServiceImpl.java` in `service/impl/`:
+- [x] S3-24 — Create `BusService.java` interface in `service/`:
+  - `createBus`, `getAllBuses`, `getBusByBusId`
+
+- [x] S3-25 — Create `BusServiceImpl.java` in `service/impl/`:
   - `createBus(CreateBusRequestDTO)`:
-    1. Check `busNumber` uniqueness — throw `ConflictException` if duplicate
-    2. Verify `routeId` exists — throw `ResourceNotFoundException` if not
-    3. Save and return `BusResponseDTO`
+    1. Checks `busNumber` uniqueness — throws `ConflictException` if duplicate
+    2. Verifies `routeId` exists — throws `ResourceNotFoundException` if not
+    3. Saves and returns `BusResponseDTO`
   - `getAllBuses()` → list of `BusResponseDTO`
-  - `getBusByBusId(UUID busId)` → throw `ResourceNotFoundException` if absent
-  - Verify: `./mvnw compile clean`
+  - `getBusByBusId(UUID busId)` → throws `ResourceNotFoundException` if absent
+  - `Bus` only stores a plain `routeId` UUID (no JPA relationship, consistent
+    with the rest of the codebase), so populating `BusResponseDTO.routeNumber`
+    needs a separate `Route` lookup per bus. **Known trade-off:** `getAllBuses()`
+    does one `Route` lookup per bus (N+1) — accepted for now given the
+    domain's real fleet size (a handful of buses per route, no pagination
+    planned), same reasoning as the monolith-over-microservices call in
+    `ARCHITECTURE.md`. Revisit (e.g. batch-fetch routes by ID into a map)
+    only if bus count actually grows large enough to matter.
+  - Verified: `./mvnw compile clean` — BUILD SUCCESS (no new derived-query
+    methods this task — `BusRepository` unchanged from S3-08 — so no app-boot
+    re-verification needed)
 
 ### Controllers
 
-- [ ] S3-26 — Create `AdminRouteController.java` in `controller/`
+- [x] S3-26 — Create `AdminRouteController.java` in `controller/`
   (ADMIN role only — all endpoints under `/admin/routes`):
   - `POST   /admin/routes`                      → createRoute
   - `GET    /admin/routes`                      → getAllRoutes
   - `GET    /admin/routes/{routeId}`            → getRouteById
-  - `PUT    /admin/routes/{routeId}/status`     → activate/deactivate route
-  - `POST   /admin/routes/{routeId}/stops`      → add stop to existing route
-  - `GET    /admin/routes/{routeId}/stops`      → list all stops on route (admin view)
+  - `PUT    /admin/routes/{routeId}/status`     → updateRoute
+  - `POST   /admin/routes/{routeId}/stops`      → addStop (see S3-21 gap note)
+  - `GET    /admin/routes/{routeId}/stops`      → `FareService.getStopsForRoute` (admin view)
   - All bodies annotated with `@Valid`
+  - **Deviation:** `PUT .../status` is named for "activate/deactivate" in the
+    plan, but wired to the already-existing `UpdateRouteRequestDTO` (fare
+    and/or status, both optional/partial) rather than a status-only DTO — no
+    separate fare-only endpoint exists anywhere in this sprint's controller
+    list, so reusing what `RouteServiceImpl.updateRoute` already supports
+    avoids either inventing an unplanned endpoint or leaving that method's
+    fare-editing half with no HTTP entry point at all.
+  - Verified: `./mvnw compile clean` — BUILD SUCCESS; app booted against live
+    Postgres, confirmed no ambiguous-mapping/bean errors; `curl` sanity check:
+    `GET /admin/routes` with no token → `401`
 
-- [ ] S3-27 — Create `AdminBusController.java` in `controller/`
-  (ADMIN role only — all endpoints under `/admin/buses`):
+- [x] S3-27 — Create `AdminBusController.java` in `controller/`
+  (ADMIN role only — spans two base paths per the plan, so no class-level
+  `@RequestMapping`, full path on each method instead):
   - `POST   /admin/buses`                              → createBus
   - `GET    /admin/buses`                              → getAllBuses
   - `GET    /admin/buses/{busId}`                      → getBusByBusId
-  - `PUT    /admin/conductors/{conductorId}/assign-bus` → assignBus
+  - `PUT    /admin/conductors/{conductorId}/assign-bus` → `ConductorService.assignBus`
+  - Verified: `./mvnw compile clean` — BUILD SUCCESS; app boot clean
 
-- [ ] S3-28 — Create `RouteController.java` in `controller/`
+- [x] S3-28 — Create `RouteController.java` in `controller/`
   (CONDUCTOR role only — conductor-facing stop + fare APIs):
-  - `GET /routes/{routeId}/stops`
-    → `FareServiceImpl.getStopsForRoute()` (full list for offline cache)
-  - `GET /routes/{routeId}/stops?search=H`
-    → `FareServiceImpl.searchStops()` (origin dropdown)
-  - `GET /routes/{routeId}/stops?after=HSR Layout&search=K`
-    → `FareServiceImpl.searchStopsAfter()` (destination dropdown)
+  - `GET /routes/{routeId}/stops` — single method branches on which optional
+    query params are present, since all three behaviors share one path:
+    - neither `search` nor `after` → `FareService.getStopsForRoute()` (full
+      list for offline cache)
+    - `search` only → `FareService.searchStops()` (origin dropdown)
+    - `after` present → `FareService.searchStopsAfter()` (destination
+      dropdown); `search` defaults to `""` if omitted so "just picked origin,
+      haven't typed anything yet" still returns the full forward list
+      (`StartingWith("")` matches everything)
   - `GET /routes/{routeId}/fare?origin=X&destination=Y&adults=2&children=1&infants=1`
-    → `FareServiceImpl.calculateFare()` (fare preview before issuing)
-  - Verify: `./mvnw compile clean`, app starts clean
+    → `FareService.calculateFare()` (fare preview before issuing)
+  - Verified: `./mvnw compile clean` — BUILD SUCCESS; app booted against live
+    Postgres, confirmed no mapping conflicts; `curl` sanity checks: both
+    `/routes/{id}/stops` and `/routes/{id}/fare` with no token → `401`
 
 ### Seed Data
 
-- [ ] S3-29 — Create `DataSeeder.java` in `config/` — `@Component`,
+- [x] S3-29 — Create `DataSeeder.java` in `config/` — `@Component`,
   implements `ApplicationRunner`. Seeds on startup only if `route` table is empty:
   - Route 500K: routeNumber="500K", routeName="Banashankari to Hebbal",
     farePerStage=6.00, status=ACTIVE
@@ -435,12 +541,30 @@ payment flows (Sprint 5), Redis caching of routes/fare (Sprint 6), Flyway (defer
   - Also seed: 1 test Bus (busNumber="KA-01-F-1234", routeId=500K-id)
   - Also seed: 1 test Conductor (email="conductor@buslink.com",
     password=BCrypt("Test@1234"), busId=test-bus-id, status=ACTIVE)
-  - Verify: app starts, pgAdmin shows route + 29 route_stop rows +
-    1 bus + 1 conductor
+  - Guard is `routeRepository.count() > 0` (checked first, returns early) —
+    Route is the seed's root; if it exists, everything downstream from it
+    (stops/bus/conductor) was already seeded too.
+  - Stop data modeled as a private `record SeedStop(stopSequence, stageNumber,
+    stopName)` + a `List.of(...)` of all 29, rather than 29 separate
+    `RouteStop.builder()` calls — keeps the seed data itself (the part that
+    might need editing later) visually separate from the seeding logic.
+  - Verified (2026-07-26): confirmed `route`/`route_stop`/`bus`/`conductor`
+    all empty first, booted the app against live Postgres, then via `psql`:
+    `route` — 1 row, exactly matching spec (farePerStage=6.00, totalStops=29,
+    originStop/destinationStop correct, status=ACTIVE); `route_stop` — 29
+    rows, first-5/last-5 checked against the stage mapping table above,
+    exact match; `bus` — 1 row (`KA-01-F-1234`) correctly linked to the
+    route; `conductor` — 1 row correctly linked to the bus, `ACTIVE`.
+    **Idempotency also verified**: restarted the app a second time against
+    the now-populated DB — row counts unchanged (1/29/1/1), confirming the
+    empty-check guard actually prevents re-seeding, not just that it seeds
+    once. This seed data is left in place (unlike the throwaway manual
+    insert used for the S3-19 verification) — it's exactly what S3-31's
+    Postman sequence will run against.
 
 ### Testing & Verification
 
-- [ ] S3-30 — Unit tests: `FareServiceImplTest.java` in `src/test/`:
+- [x] S3-30 — Unit tests: `FareServiceImplTest.java` in `src/test/`:
   - Mock: `RouteStopRepository`, `RouteRepository`
   - `calculateFare_sameStage` — origin=dest stage → stagesCrossed=1, minimum fare
   - `calculateFare_multipleStages` — HSR(5) → KR Puram(10) →
@@ -449,7 +573,25 @@ payment flows (Sprint 5), Redis caching of routes/fare (Sprint 6), Flyway (defer
   - `calculateFare_destinationBeforeOrigin` → ValidationException thrown
   - `calculateFare_invalidStop` → ResourceNotFoundException thrown
   - `searchStopsAfter_returnsOnlyForwardStops` — stops before origin excluded
-  - Verify: `./mvnw test -Dtest=FareServiceImplTest` — all pass
+  - Verified: `./mvnw test -Dtest=FareServiceImplTest` — 5/5 pass
+  - **Scope gap found and closed (2026-07-26):** the sprint's own Scope
+    section (top of this file) lists `RouteServiceImplTest` alongside
+    `FareServiceImplTest`, but no task number or Definition of Done line was
+    ever created for it — confirmed with the user and added it to this task
+    rather than leave a declared-in-scope item quietly unfulfilled. 8 tests
+    added covering `RouteServiceImpl`: `createRoute_success`,
+    `createRoute_duplicateRouteNumber`, `createRoute_duplicateStopNameInRequest`,
+    `updateRoute_partialFareUpdate`, `deleteRoute_setsStatusInactive`,
+    `addStop_success`, `addStop_wrongSequence_throwsValidation`,
+    `addStop_lowerStageNumber_throwsValidation` (the last one directly
+    exercises the stage-consistency bug caught during S3-21's design review).
+  - Verified: `./mvnw test -Dtest=FareServiceImplTest,RouteServiceImplTest` —
+    13/13 pass; full `./mvnw test` afterward — 26/26 pass, including
+    `BusLinkApplicationTests.contextLoads` (needs `infrastructure/.env`
+    sourced into the shell running Maven — each Bash invocation starts fresh
+    and doesn't inherit an earlier `source`, so this fails if env vars aren't
+    re-sourced in the same command; not a code issue, same pattern noted in
+    Sprint 2)
 
 - [ ] S3-31 — Postman verification sequence:
   - `POST /conductor/auth/login` (seeded conductor credentials)
@@ -509,5 +651,7 @@ payment flows (Sprint 5), Redis caching of routes/fare (Sprint 6), Flyway (defer
 - [ ] ROLE_PASSENGER cannot access `/routes/**` — returns 403
 - [ ] No token on `/admin/**` — returns 401
 - [ ] All 5 `FareServiceImplTest` unit tests pass
+- [ ] All 8 `RouteServiceImplTest` unit tests pass (added to Scope but missing
+      from this list originally — see S3-30 note)
 - [ ] All 8 Postman verification calls pass
 - [ ] `feature/route-fare-conductor-auth` merged into `dev`, build clean
