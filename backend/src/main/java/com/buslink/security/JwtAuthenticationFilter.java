@@ -11,7 +11,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
-import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.stereotype.Component;
@@ -25,13 +24,17 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private static final String AUTH_HEADER = "Authorization";
     private static final String BEARER_PREFIX = "Bearer ";
     private static final String AUTH_PATH_PREFIX = "/auth/";
+    private static final String CONDUCTOR_AUTH_PATH_PREFIX = "/conductor/auth/";
+    private static final String ROLE_CONDUCTOR = "CONDUCTOR";
 
     private final JwtUtil jwtUtil;
-    private final UserDetailsService userDetailsService;
+    private final UserDetailsServiceImpl userDetailsServiceImpl;
+    private final ConductorDetailsServiceImpl conductorDetailsServiceImpl;
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return request.getServletPath().startsWith(AUTH_PATH_PREFIX);
+        String path = request.getServletPath();
+        return path.startsWith(AUTH_PATH_PREFIX) || path.startsWith(CONDUCTOR_AUTH_PATH_PREFIX);
     }
 
     @Override
@@ -56,7 +59,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
             if (SecurityContextHolder.getContext().getAuthentication() == null) {
                 String email = jwtUtil.extractUsername(token);
-                UserDetails userDetails = userDetailsService.loadUserByUsername(email);
+                UserDetails userDetails = ROLE_CONDUCTOR.equals(jwtUtil.extractRole(token))
+                        ? conductorDetailsServiceImpl.loadUserByUsername(email)
+                        : userDetailsServiceImpl.loadUserByUsername(email);
 
                 if (jwtUtil.isTokenValid(token, userDetails)) {
                     UsernamePasswordAuthenticationToken authToken =

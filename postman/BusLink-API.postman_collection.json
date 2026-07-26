@@ -2,12 +2,14 @@
   "info": {
     "_postman_id": "c56b0cb3-6605-4eb7-aadf-b7616de42023",
     "name": "BusLink API",
-    "description": "Sprint 2 — passenger auth (register/login/refresh) and profile/QR endpoints. Import into Postman Desktop; run Auth > Login at least once to populate {{accessToken}} before hitting the User folder.",
+    "description": "Sprint 2 — passenger auth (register/login/refresh) and profile/QR endpoints. Sprint 3 — conductor auth, route/stop/fare APIs. Import into Postman Desktop. Run Auth > Login at least once to populate {{accessToken}} before hitting User; run Conductor Auth > Login at least once to populate {{conductorAccessToken}} and {{routeId}} before hitting Route/Fare.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     { "key": "baseUrl", "value": "http://localhost:8080", "type": "string" },
-    { "key": "accessToken", "value": "", "type": "string" }
+    { "key": "accessToken", "value": "", "type": "string" },
+    { "key": "conductorAccessToken", "value": "", "type": "string" },
+    { "key": "routeId", "value": "", "type": "string" }
   ],
   "item": [
     {
@@ -129,6 +131,283 @@
               "raw": "{{baseUrl}}/user/qr",
               "host": ["{{baseUrl}}"],
               "path": ["user", "qr"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Conductor Auth",
+      "item": [
+        {
+          "id": "6f6d6f2e-1a2b-4c3d-9e8f-1a2b3c4d5e6f",
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.success && body.data) {",
+                  "    if (body.data.accessToken) {",
+                  "        pm.collectionVariables.set('conductorAccessToken', body.data.accessToken);",
+                  "    }",
+                  "    if (body.data.routeId) {",
+                  "        pm.collectionVariables.set('routeId', body.data.routeId);",
+                  "    }",
+                  "}",
+                  "",
+                  "pm.test('Login returned 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('conductorAccessToken captured', function () {",
+                  "    pm.expect(pm.collectionVariables.get('conductorAccessToken')).to.not.be.empty;",
+                  "});",
+                  "",
+                  "pm.test('routeId is non-null', function () {",
+                  "    pm.expect(pm.collectionVariables.get('routeId')).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"conductor@buslink.com\",\n  \"password\": \"Test@1234\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/conductor/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["conductor", "auth", "login"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Route",
+      "item": [
+        {
+          "id": "7a7e7f3f-2b3c-4d4e-af9f-2b3c4d5e6f7a",
+          "name": "Get Stops (Full List)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Returns 29 stops in sequence order', function () {",
+                  "    const stops = pm.response.json().data;",
+                  "    pm.expect(stops).to.have.lengthOf(29);",
+                  "    for (let i = 1; i < stops.length; i++) {",
+                  "        pm.expect(stops[i].stopSequence).to.be.above(stops[i - 1].stopSequence);",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{conductorAccessToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/routes/{{routeId}}/stops",
+              "host": ["{{baseUrl}}"],
+              "path": ["routes", "{{routeId}}", "stops"]
+            }
+          },
+          "response": []
+        },
+        {
+          "id": "8b8f8a4a-3c4d-4e5f-ba0a-3c4d5e6f7a8b",
+          "name": "Get Stops (Search)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Returns only H-matching stops', function () {",
+                  "    const names = pm.response.json().data.map(s => s.stopName).sort();",
+                  "    const expected = ['HBR Layout', 'HSR Layout', 'Hebbal Bridge', 'Hennur Junction'].sort();",
+                  "    pm.expect(names).to.eql(expected);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{conductorAccessToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/routes/{{routeId}}/stops?search=H",
+              "host": ["{{baseUrl}}"],
+              "path": ["routes", "{{routeId}}", "stops"],
+              "query": [{ "key": "search", "value": "H" }]
+            }
+          },
+          "response": []
+        },
+        {
+          "id": "9c9a9b5b-4d5e-4f6a-cb1b-4d5e6f7a8b9c",
+          "name": "Get Stops (After + Search)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Returns only forward stops matching K', function () {",
+                  "    const names = pm.response.json().data.map(s => s.stopName).sort();",
+                  "    const expected = ['Kadabisanahalli', 'Karthiknagar', 'KR Puram Railway Station', 'Kasturi Nagar', 'Kalyan Nagar', 'Kempapura'].sort();",
+                  "    pm.expect(names).to.eql(expected);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{conductorAccessToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/routes/{{routeId}}/stops?after=HSR Layout&search=K",
+              "host": ["{{baseUrl}}"],
+              "path": ["routes", "{{routeId}}", "stops"],
+              "query": [
+                { "key": "after", "value": "HSR Layout" },
+                { "key": "search", "value": "K" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "id": "ad0adac6-5e6f-4a7b-dc2c-5e6f7a8b9c0d",
+          "name": "Get Stops (Passenger Token - expect 403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('ROLE_PASSENGER cannot access CONDUCTOR endpoint', function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/routes/{{routeId}}/stops",
+              "host": ["{{baseUrl}}"],
+              "path": ["routes", "{{routeId}}", "stops"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Fare",
+      "item": [
+        {
+          "id": "be1bebd7-6f7a-4b8c-ed3d-6f7a8b9c0d1e",
+          "name": "Get Fare",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Fare calculated correctly for HSR -> KR Puram, 2A+1C+1I', function () {",
+                  "    const data = pm.response.json().data;",
+                  "    pm.expect(data.stagesCrossed).to.eql(6);",
+                  "    pm.expect(parseFloat(data.adultFare)).to.eql(36);",
+                  "    pm.expect(parseFloat(data.childFare)).to.eql(18);",
+                  "    pm.expect(parseFloat(data.totalFare)).to.eql(90);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{conductorAccessToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/routes/{{routeId}}/fare?origin=HSR Layout&destination=KR Puram Railway Station&adults=2&children=1&infants=1",
+              "host": ["{{baseUrl}}"],
+              "path": ["routes", "{{routeId}}", "fare"],
+              "query": [
+                { "key": "origin", "value": "HSR Layout" },
+                { "key": "destination", "value": "KR Puram Railway Station" },
+                { "key": "adults", "value": "2" },
+                { "key": "children", "value": "1" },
+                { "key": "infants", "value": "1" }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Admin",
+      "item": [
+        {
+          "id": "cf2cfce8-7a8b-4c9d-fe4e-7a8b9c0d1e2f",
+          "name": "Create Route (No Token - expect 401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('No token on /admin/** returns 401', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/routes",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "routes"]
             }
           },
           "response": []
