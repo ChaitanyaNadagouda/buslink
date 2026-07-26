@@ -613,7 +613,16 @@ payment flows (Sprint 5), Redis caching of routes/fare (Sprint 6), Flyway (defer
 
 ### Git
 
-- [ ] S3-32 — Commit and merge `feature/route-fare-conductor-auth` into `dev`
+- [x] S3-32 — Commit and merge `feature/route-fare-conductor-auth` into `dev`
+  - All sprint closure docs (`PROJECT_CONTEXT.md`, `DEVELOPMENT_LOG.md`,
+    `ARCHITECTURE.md`, `API.md`, `INTERVIEW_PREP.md`, `DEVELOPMENT_ROADMAP.md`)
+    updated and committed on the feature branch itself, before merging —
+    per explicit request, a deliberate change from Sprint 1/2's pattern of
+    writing the closure commit on `dev` right after merging.
+  - Merged with `--no-ff` into `dev`, no conflicts.
+  - Verified post-merge: `./mvnw clean test` — 26/26 pass (one transient
+    flaky failure on the first run, confirmed not a regression — see the
+    Definition of Done note below for the full trace).
 
 ---
 
@@ -635,23 +644,49 @@ payment flows (Sprint 5), Redis caching of routes/fare (Sprint 6), Flyway (defer
 
 ## Definition of Done
 
-- [ ] `route` table has new columns: `route_number`, `fare_per_stage`,
-      `total_stops`, `origin_stop`, `destination_stop`, `status`
-- [ ] `route_stop` table exists with 29 rows for Route 500K visible in pgAdmin
-- [ ] `ticket` table has new columns: `stages_crossed`, `adult_count`,
+- [x] `route` table has new columns: `route_number`, `fare_per_stage`,
+      `total_stops`, `origin_stop`, `destination_stop`, `status` — confirmed
+      via `psql \d route` (2026-07-26)
+- [x] `route_stop` table exists with 29 rows for Route 500K visible in
+      pgAdmin — confirmed via `psql` (`SELECT count(*) FROM route_stop` = 29,
+      same live DB pgAdmin connects to)
+- [x] `ticket` table has new columns: `stages_crossed`, `adult_count`,
       `child_count`, `infant_count`, `adult_fare`, `child_fare`, `total_fare`;
-      old `fare` column manually dropped
-- [ ] `POST /conductor/auth/login` returns tokens with `routeId` in response
-- [ ] `GET /routes/{routeId}/stops` returns 29 stops in sequence order
-- [ ] `GET /routes/{routeId}/stops?search=H` returns only H-matching stops
-- [ ] `GET /routes/{routeId}/stops?after=HSR Layout&search=K` returns only
-      forward stops matching K
-- [ ] `GET /routes/{routeId}/fare` with HSR→KR Puram, 2A+1C+1I returns
-      stagesCrossed=6, totalFare=90.00
-- [ ] ROLE_PASSENGER cannot access `/routes/**` — returns 403
-- [ ] No token on `/admin/**` — returns 401
-- [ ] All 5 `FareServiceImplTest` unit tests pass
-- [ ] All 8 `RouteServiceImplTest` unit tests pass (added to Scope but missing
-      from this list originally — see S3-30 note)
+      old `fare` column manually dropped — confirmed via `psql \d ticket`,
+      no standalone `fare` column present
+- [x] `POST /conductor/auth/login` returns tokens with `routeId` in response
+      — verified live in S3-19's closure and again in Postman Desktop (S3-31)
+- [x] `GET /routes/{routeId}/stops` returns 29 stops in sequence order —
+      Postman Desktop, all assertions green
+- [x] `GET /routes/{routeId}/stops?search=H` returns only H-matching stops —
+      Postman Desktop, exact 4-stop match asserted and passed
+- [x] `GET /routes/{routeId}/stops?after=HSR Layout&search=K` returns only
+      forward stops matching K — Postman Desktop, exact 6-stop match passed
+- [x] `GET /routes/{routeId}/fare` with HSR→KR Puram, 2A+1C+1I returns
+      stagesCrossed=6, totalFare=90.00 — Postman Desktop, passed
+- [x] ROLE_PASSENGER cannot access `/routes/**` — returns 403 — Postman
+      Desktop, passed
+- [x] No token on `/admin/**` — returns 401 — Postman Desktop, passed
+- [x] All 5 `FareServiceImplTest` unit tests pass — confirmed, 5/5
+- [x] All 8 `RouteServiceImplTest` unit tests pass (added to Scope but missing
+      from this list originally — see S3-30 note) — confirmed, 8/8
+- [x] All 8 Postman verification calls pass — confirmed live in Postman
+      Desktop by the project owner (2026-07-26)
+- [x] `feature/route-fare-conductor-auth` merged into `dev`, build clean —
+      merged, `./mvnw clean test` — 26/26 pass on `dev` post-merge. One
+      transient failure hit on the first post-merge run
+      (`JwtUtilTest.isTokenValid_returnsFalse_forTamperedToken`, alongside an
+      anomalous 470s runtime for an unrelated pure-Mockito test in the same
+      run) — re-ran in isolation and as part of the full suite twice more,
+      passed cleanly both times. Root cause of the test's occasional
+      flakiness: it tampers with a JWT by flipping only its last base64
+      character, but base64's 6-bits-per-character packing means the last
+      character of a signature doesn't always encode bits that affect the
+      decoded byte value — an unlucky token can have its last character
+      flipped without the underlying signature bytes actually changing, so
+      verification spuriously passes. Pre-existing Sprint 2 test, untouched
+      by Sprint 3; not fixed here (out of this sprint's scope), but worth
+      flagging for a future sprint since a flaky test is a real (if rare)
+      liability.
 - [ ] All 8 Postman verification calls pass
 - [ ] `feature/route-fare-conductor-auth` merged into `dev`, build clean
