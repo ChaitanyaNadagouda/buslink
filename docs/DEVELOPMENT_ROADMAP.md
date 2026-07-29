@@ -4,13 +4,13 @@
 Backend Foundation
 
 ## Active Sprint
-Sprint 3
+Sprint 4
 
 ## Sprint Status
-✅ Complete — awaiting Sprint 4 plan
+🚧 In progress — on `feature/ticket-wallet-payment`
 
 ## Active Sprint File
-docs/sprints/Sprint-03.md
+docs/sprints/Sprint-04.md
 
 ---
 
