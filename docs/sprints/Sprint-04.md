@@ -62,67 +62,113 @@ written. Both are resolved in the Tasks section below (S4-15), not left implicit
 
 ### New Entity
 
-- [ ] S4-01 — Create `IdempotencyKey.java` in `entity/` — new entity:
-  - `key` (VARCHAR, PK — the client-sent UUID string, not generated)
+- [x] S4-01 — Create `IdempotencyKey.java` in `entity/` — new entity:
+  - `key` (VARCHAR, PK — the client-sent UUID string, not generated — no
+    `@GeneratedValue`)
   - `ticketId` (UUID, not null — points to the ticket created for this key)
   - `createdAt` (Instant, not null)
   - `expiresAt` (Instant, not null — 24hrs after createdAt)
   - Table: `idempotency_key`
-  - Does NOT extend `BaseEntity` — has its own `createdAt` and `expiresAt`
-    with no `updatedAt` (idempotency keys are immutable once created)
-  - Verify: app starts, `idempotency_key` table created in pgAdmin
+  - Does NOT extend `BaseEntity` — no Hibernate `@CreationTimestamp` either:
+    `createdAt`/`expiresAt` are both set explicitly by the service layer
+    together (`now`, `now + ttl`) when the key is first stored (S4-12), not
+    auto-stamped independently — letting Hibernate own `createdAt` while the
+    service separately computes `expiresAt` would risk the two being based
+    on slightly different clock reads
+  - Verified: `./mvnw compile clean` — BUILD SUCCESS; app booted against
+    live Postgres, `psql \d idempotency_key` confirms `key` (VARCHAR PK),
+    `ticket_id` (UUID not null), `created_at`/`expires_at` (timestamptz not
+    null) — matches spec exactly
 
 ### New Repositories
 
-- [ ] S4-02 — `TicketRepository.java` in `repository/` — extend
+- [x] S4-02 — `TicketRepository.java` in `repository/` — extend
   `JpaRepository<Ticket, UUID>`:
   - `List<Ticket> findByConductorIdAndStatusOrderByIssuedAtAsc(UUID conductorId, TicketStatus status)`
   - `List<Ticket> findByUserIdOrderByIssuedAtDesc(UUID userId)`
   - `Optional<Ticket> findByTicketIdAndConductorId(UUID ticketId, UUID conductorId)`
   - `Optional<Ticket> findByTicketIdAndUserId(UUID ticketId, UUID userId)`
 
-- [ ] S4-03 — `TransactionRepository.java` in `repository/` — extend
+- [x] S4-03 — `TransactionRepository.java` in `repository/` — extend
   `JpaRepository<Transaction, UUID>`:
   - `List<Transaction> findByUserIdOrderByCreatedAtDesc(UUID userId)`
 
-- [ ] S4-04 — `PaymentRepository.java` in `repository/` — extend
+- [x] S4-04 — `PaymentRepository.java` in `repository/` — extend
   `JpaRepository<Payment, UUID>`:
-  - `Optional<Payment> findByTicketId(UUID ticketId)`  ← for UPI later
+  - **Gap found and fixed:** the plan asked for `findByTicketId(UUID ticketId)`,
+    but `Payment` (Sprint 1) has no `ticketId` field — only a generic
+    `referenceId` (deliberately generic since a `Payment` isn't always
+    ticket-related, e.g. a wallet top-up references nothing ticket-side).
+    `findByTicketId` would have failed at startup with a
+    `PropertyReferenceException`. Confirmed with the user: implemented as
+    `Optional<Payment> findByReferenceId(UUID referenceId)` instead — for
+    UPI later, unused by this sprint's own logic (`WalletServiceImpl` never
+    touches `Payment`, only `Wallet`/`Transaction`/`Ticket`)
+  - Verified: `./mvnw compile clean` — BUILD SUCCESS
 
-- [ ] S4-05 — `IdempotencyKeyRepository.java` in `repository/` — extend
+- [x] S4-05 — `IdempotencyKeyRepository.java` in `repository/` — extend
   `JpaRepository<IdempotencyKey, String>` (String PK — the key itself):
   - `Optional<IdempotencyKey> findByKey(String key)`
   - `void deleteByExpiresAtBefore(Instant now)` ← cleanup, used by scheduler Sprint 7
-  - Verify all 4 new repositories: `./mvnw compile clean`
+  - Verified all 4 new repositories: `./mvnw compile clean` — BUILD SUCCESS;
+    app booted against live Postgres, no `PropertyReferenceException` for
+    any of the new derived query methods
 
 ### Configuration
 
-- [ ] S4-06 — Add wallet overdraft config to `application.properties`:
+- [x] S4-06 — Add wallet overdraft config to `application.properties`:
   ```
-  wallet.overdraft.limit=100.00
+  wallet.overdraft-limit=100.00
   ```
-  - Create `WalletProperties.java` in `config/` — `@ConfigurationProperties(prefix="wallet")`
-    with `BigDecimal overdraftLimit` field
-  - Add `@EnableConfigurationProperties(WalletProperties.class)` to main class
-    or `@ConfigurationPropertiesScan`
-  - This is cleaner than `@Value` for a value that multiple services may need
+  - **Gap found and fixed:** the plan's key was `wallet.overdraft.limit` (a dot),
+    described alongside a flat `overdraftLimit` field under `prefix="wallet"`.
+    Those two don't actually bind together — Spring's relaxed binding only
+    equates camelCase/kebab-case/snake_case *within one property segment*; a
+    literal `.` always means one more level of nesting to the binder, never a
+    word-boundary. As written, `overdraftLimit` would have silently bound to
+    `null` — no error, no exception, just a field that's never set — and only
+    surfaced later as an NPE inside `WalletServiceImpl.payViaWallet()`.
+    Confirmed with the user: fixed by using a kebab-case flat key
+    (`wallet.overdraft-limit`) instead, keeping the simple one-field
+    `WalletProperties` shape the plan intended.
+  - Created `WalletProperties.java` in `config/` — a **record**
+    (`@ConfigurationProperties(prefix="wallet")`, one field `overdraftLimit`)
+    rather than a Lombok `@Getter/@Setter` class — idiomatic modern Spring
+    Boot style for immutable configuration properties, and simpler than a
+    mutable POJO for a single value
+  - Added `@ConfigurationPropertiesScan` to `BusLinkApplication` (over
+    `@EnableConfigurationProperties(WalletProperties.class)` — scans
+    automatically, no need to list every properties class by name as more
+    get added)
+  - Verified two ways: `./mvnw compile clean` (BUILD SUCCESS) — but compile
+    success can't prove the *value* actually binds, only that the code is
+    valid, so also added `WalletPropertiesTest.java` (`ApplicationContextRunner`,
+    binds `WalletProperties` in isolation with the real property key) — passes,
+    confirms `overdraftLimit` resolves to `100.00`. Empirically re-ran the same
+    test with the *original* dotted key (`wallet.overdraft.limit`) to confirm
+    it really does silently bind to `null` — it does, validating the gap was
+    real before removing that throwaway proof
 
-- [ ] S4-07 — Add idempotency key TTL config to `application.properties`:
+- [x] S4-07 — Add idempotency key TTL config to `application.properties`:
   ```
   ticket.idempotency.ttl-hours=24
   ```
 
 ### DTOs
 
-- [ ] S4-08 — Request DTOs in `dto/request/` (Java records):
+- [x] S4-08 — Request DTOs in `dto/request/` (Java records):
   - `IssueTicketRequestDTO` — qrToken (@NotBlank), busId (@NotNull),
     routeId (@NotNull), originStop (@NotBlank), destinationStop (@NotBlank),
     adults (@NotNull, @Min=1), children (@NotNull, @Min=0),
     infants (@NotNull, @Min=0)
     Note: minimum 1 adult — a ticket must have at least one paying passenger
-  - `WalletPaymentRequestDTO` — ticketId (@NotNull)
+  - `WalletPaymentRequestDTO` — ticketId (@NotNull) only; `userId` deliberately
+    excluded (comes from `@AuthenticationPrincipal`, never trusted from the
+    request body) and `amount` excluded (service computes it from
+    `ticket.totalFare`, never trusts a client-supplied amount)
+  - Verified: `./mvnw compile` — BUILD SUCCESS after each DTO
 
-- [ ] S4-09 — Response DTOs in `dto/response/` (Java records):
+- [x] S4-09 — Response DTOs in `dto/response/` (Java records):
   - `IssueTicketResponseDTO` — ticketId, userId, originStop, destinationStop,
     stagesCrossed, adults, children, infants, adultFare, childFare, totalFare,
     status, issuedAt
@@ -143,7 +189,7 @@ written. Both are resolved in the Tasks section below (S4-15), not left implicit
 
 ### Security Config Update
 
-- [ ] S4-10 — Update `SecurityConfig.java` — add new endpoint rules:
+- [x] S4-10 — Update `SecurityConfig.java` — add new endpoint rules:
   ```
   POST /tickets/issue          → ROLE_CONDUCTOR
   GET  /conductor/tickets/**   → ROLE_CONDUCTOR
@@ -151,29 +197,56 @@ written. Both are resolved in the Tasks section below (S4-15), not left implicit
   POST /payments/wallet        → ROLE_PASSENGER
   GET  /passenger/**           → ROLE_PASSENGER
   ```
-  - Verify: `./mvnw compile clean`, existing auth flows still work
+  - **Gap found:** `GET /conductor/tickets/**` needed no new rule — already
+    covered by the existing Sprint 3 rule
+    `.requestMatchers("/conductor/**").hasRole("CONDUCTOR")`, which applies
+    to all HTTP methods under `/conductor/**`. Adding an explicit duplicate
+    would have been dead code; skipped. The 4 rules actually added:
+    `POST /tickets/issue`, `PUT /tickets/*/terminate`, `POST /payments/wallet`,
+    `GET /passenger/**` (all `ROLE_CONDUCTOR`/`ROLE_PASSENGER` as specified).
+  - Verified: `./mvnw compile clean` — BUILD SUCCESS; booted app live against
+    Postgres — no-token `/user/profile`, `/conductor/profile`, `/admin/routes`
+    all still `401`; conductor login still returns `200` with valid
+    access/refresh tokens. Existing auth flows unaffected.
 
 ### Ticket Entity Updates
 
-- [ ] S4-15 — Update `Ticket.java` in `entity/`, and `TicketStatus.java` in
+- [x] S4-15 — Update `Ticket.java` in `entity/`, and `TicketStatus.java` in
   `enums/` — resolves the two gaps found during plan review (see above):
-  - Add `paidAt` field to `Ticket` (Instant, nullable — null until payment
-    confirmed); `ddl-auto=update` adds the column automatically
-  - Rename `Ticket.sourceStop` → `originStop` (matches `Route`/`RouteStop`
-    naming) — `ddl-auto=update` will *add* a new `origin_stop` column rather
-    than rename the existing one; manually drop the old `source_stop` column
-    via `psql` afterward (`ticket` table is empty, so no backfill needed —
-    same treatment as Sprint 3's `fare` → `totalFare` rename)
-  - Add `TERMINATED` to `TicketStatus` enum (alongside existing
+  - Added `paidAt` field to `Ticket` (Instant, nullable — null until payment
+    confirmed); `ddl-auto=update` added the column automatically
+  - Renamed `Ticket.sourceStop` → `originStop` (matches `Route`/`RouteStop`
+    naming). Grepped first — `sourceStop` had no references outside the
+    entity itself, so nothing else needed updating. `ddl-auto=update` added
+    a new `origin_stop` column rather than renaming the existing one;
+    manually dropped the old `source_stop` column via `psql` afterward
+    (`ticket` table was empty, no backfill needed — same treatment as
+    Sprint 3's `fare` → `totalFare` rename)
+  - Added `TERMINATED` to `TicketStatus` enum (alongside existing
     `ISSUED, PAID, EXPIRED, CANCELLED`)
-  - Verify: app starts, `paid_at` and `origin_stop` columns present on
-    `ticket` in pgAdmin, `source_stop` gone, app restart shows zero-diff
+  - **Gap found and fixed (unrelated to the rename):** Postgres still had a
+    Hibernate-generated `ticket_status_check` constraint from Sprint 1's
+    `ddl-auto=create`, hardcoded to the original 4 enum values.
+    `ddl-auto=update` never alters existing constraints, so `TERMINATED`
+    would compile fine and pass mocked unit tests but fail at the DB layer
+    the moment `terminateTicket()` (S4-12) tries to persist it — a runtime
+    failure invisible to anything except a live DB. Proved it empirically
+    with a rollback-wrapped `INSERT ... status='TERMINATED'` before treating
+    it as real (confirmed: `ERROR: violates check constraint
+    "ticket_status_check"`). Fixed via `psql`: dropped and recreated the
+    constraint with `TERMINATED` included; re-ran the same insert test to
+    confirm it now succeeds.
+  - Verified: `./mvnw compile clean` — BUILD SUCCESS; app booted against
+    live Postgres — `psql \d ticket` confirms `paid_at`/`origin_stop`
+    present, `source_stop` gone, `ticket_status_check` now includes all 5
+    values; app restart afterward shows zero schema diff (no ALTER/CREATE
+    statements, no errors).
 
 ### Ticket Service
 
-- [ ] S4-11 — Create `TicketService.java` interface in `service/`
+- [x] S4-11 — Create `TicketService.java` interface in `service/`
 
-- [ ] S4-12 — Create `TicketServiceImpl.java` in `service/impl/`:
+- [x] S4-12 — Create `TicketServiceImpl.java` in `service/impl/`:
 
   **`issueTicket(IssueTicketRequestDTO, UUID conductorId, String idempotencyKey)`:**
   1. Idempotency check — `idempotencyKeyRepository.findByKey(idempotencyKey)`:
@@ -208,6 +281,15 @@ written. Both are resolved in the Tasks section below (S4-15), not left implicit
       → `idempotencyKeyRepository.save(...)`
   11. Return `IssueTicketResponseDTO`
   - `@Transactional` — ticket save + idempotency key save together
+  - **Gap found and fixed:** the plan text hardcoded `now + 24hrs`, but S4-07
+    already added `ticket.idempotency.ttl-hours=24` to `application.properties`
+    for exactly this purpose — building it as literally written would leave
+    that config dead/unused. Added `TicketProperties` (`config/`, `record`,
+    `@ConfigurationProperties(prefix="ticket.idempotency")`, field `ttlHours`),
+    mirroring `WalletProperties`'s pattern exactly. Verified the binding itself
+    (not just compile success) with `TicketPropertiesTest`
+    (`ApplicationContextRunner`, same shape as `WalletPropertiesTest`) — passes,
+    confirms `ttlHours` resolves to `24` from the kebab-case property key.
 
   **`getPendingTickets(UUID conductorId)`:**
   → `ticketRepository.findByConductorIdAndStatusOrderByIssuedAtAsc(conductorId, ISSUED)`
@@ -234,13 +316,14 @@ written. Both are resolved in the Tasks section below (S4-15), not left implicit
   → throw `ResourceNotFoundException` if absent
   → map to `TicketDetailResponseDTO`
 
-  - Verify: `./mvnw compile clean`
+  - Verified: `./mvnw compile clean` — BUILD SUCCESS; `TicketPropertiesTest`
+    passes (see gap note above).
 
 ### Wallet Service
 
-- [ ] S4-13 — Create `WalletService.java` interface in `service/`
+- [x] S4-13 — Create `WalletService.java` interface in `service/`
 
-- [ ] S4-14 — Create `WalletServiceImpl.java` in `service/impl/`:
+- [x] S4-14 — Create `WalletServiceImpl.java` in `service/impl/`:
 
   **`payViaWallet(WalletPaymentRequestDTO, UUID userId)`:**
   1. Fetch ticket → `ticketRepository.findByTicketIdAndUserId(ticketId, userId)`
@@ -292,11 +375,18 @@ written. Both are resolved in the Tasks section below (S4-15), not left implicit
   → `transactionRepository.findByUserIdOrderByCreatedAtDesc(userId)`
   → map to `TransactionResponseDTO`
 
-  - Verify: `./mvnw compile clean`
+  - Verified: `./mvnw compile clean` — BUILD SUCCESS. `walletProperties
+    .getOverdraftLimit()` in the plan pseudocode adjusted to
+    `walletProperties.overdraftLimit()` — `WalletProperties` is a record
+    (S4-06), so its accessor is the record-style name, not a POJO getter.
+    No manual locking code needed for step 6 — `Wallet.version` (`@Version`,
+    Sprint 1) makes `walletRepository.save(wallet)` fail automatically with
+    `ObjectOptimisticLockingFailureException` on a concurrent write, already
+    mapped to `409` by `GlobalExceptionHandler` since Sprint 2.
 
 ### Controllers
 
-- [ ] S4-16 — Create `TicketController.java` in `controller/`
+- [x] S4-16 — Create `TicketController.java` in `controller/`
   (conductor-facing — ROLE_CONDUCTOR):
   - `POST /tickets/issue`
     → extract `X-Idempotency-Key` header (throw `ValidationException` if missing)
@@ -307,8 +397,18 @@ written. Both are resolved in the Tasks section below (S4-15), not left implicit
   - `PUT /tickets/{ticketId}/terminate`
     → `TicketServiceImpl.terminateTicket()` → `ApiResponse<IssueTicketResponseDTO>`
   - All `@Valid` on request bodies
+  - **Design note:** no class-level `@RequestMapping` — `/tickets/issue`,
+    `/conductor/tickets/pending`, and `/tickets/{ticketId}/terminate` don't
+    share one path root, so each method carries its own full path instead of
+    forcing an artificial common prefix.
+  - **Design note:** `X-Idempotency-Key` read via `@RequestHeader(required
+    = false)` + a manual null/blank check throwing `ValidationException`,
+    rather than `required = true`. Spring's own missing-header rejection
+    doesn't go through `GlobalExceptionHandler` and wouldn't come back in
+    the app's uniform `ApiResponse` shape — the manual check keeps every
+    error response consistent.
 
-- [ ] S4-17 — Create `PassengerController.java` in `controller/`
+- [x] S4-17 — Create `PassengerController.java` in `controller/`
   (passenger-facing — ROLE_PASSENGER):
   - `GET /passenger/tickets`
     → `TicketServiceImpl.getPassengerTickets()` → `ApiResponse<List<TicketDetailResponseDTO>>`
@@ -319,19 +419,27 @@ written. Both are resolved in the Tasks section below (S4-15), not left implicit
   - `GET /passenger/wallet/transactions`
     → `WalletServiceImpl.getTransactionHistory()` → `ApiResponse<List<TransactionResponseDTO>>`
 
-- [ ] S4-18 — Create `PaymentController.java` in `controller/`
+- [x] S4-18 — Create `PaymentController.java` in `controller/`
   (passenger-facing — ROLE_PASSENGER):
   - `POST /payments/wallet`
     → extract `userId` from `@AuthenticationPrincipal UserPrincipal`
     → `WalletServiceImpl.payViaWallet()` → `ApiResponse<WalletPaymentResponseDTO>`
-  - Verify all 3 controllers: `./mvnw compile clean`, app starts clean
+  - Verified all 3 controllers: `./mvnw compile clean` — BUILD SUCCESS; app
+    booted live against Postgres with zero wiring errors. Spot-checked live:
+    no-token `POST /tickets/issue`, `GET /passenger/tickets`, `POST
+    /payments/wallet` all correctly `401`; conductor login + `POST
+    /tickets/issue` without the idempotency header returns `400` with
+    `"X-Idempotency-Key header is required"` in the standard `ApiResponse`
+    shape (not a raw Spring error).
 
 ### Testing & Verification
 
-- [ ] S4-19 — Unit tests: `TicketServiceImplTest.java` in `src/test/`:
+- [x] S4-19 — Unit tests: `TicketServiceImplTest.java` in `src/test/`:
   - Mock: `TicketRepository`, `UserRepository`, `ConductorRepository`,
     `BusRepository`, `RouteRepository`, `RouteStopRepository`,
-    `IdempotencyKeyRepository`
+    `IdempotencyKeyRepository`, plus `TicketProperties` (needed since S4-12
+    added it as a constructor dependency — Mockito 5.23.0's default mock
+    maker mocks records/final classes with no extra setup)
   - `issueTicket_success` — verify ticket saved with ISSUED status,
     idempotency key saved, correct fare calculated
   - `issueTicket_idempotentRequest` — same key sent twice →
@@ -342,9 +450,14 @@ written. Both are resolved in the Tasks section below (S4-15), not left implicit
   - `issueTicket_destinationBeforeOrigin` → `ValidationException` thrown
   - `terminateTicket_success` — verify status = TERMINATED
   - `terminateTicket_alreadyPaid` → `ValidationException` thrown
-  - Verify: `./mvnw test -Dtest=TicketServiceImplTest` — all pass
+  - Verified: `./mvnw test -Dtest=TicketServiceImplTest` — 8/8 pass; full
+    `./mvnw test` — 36/36 pass. One unrelated flaky failure surfaced on the
+    first full-suite run (`JwtUtilTest.isTokenValid_returnsFalse_for
+    TamperedToken`, a pre-existing Sprint 2 test untouched this session) —
+    passed both in isolation and on a clean re-run of the full suite, so not
+    a regression from this sprint's work.
 
-- [ ] S4-20 — Unit tests: `WalletServiceImplTest.java` in `src/test/`:
+- [x] S4-20 — Unit tests: `WalletServiceImplTest.java` in `src/test/`:
   - Mock: `WalletRepository`, `TicketRepository`,
     `TransactionRepository`, `WalletProperties`
   - `payViaWallet_success_sufficientBalance` — balance deducted,
@@ -357,9 +470,11 @@ written. Both are resolved in the Tasks section below (S4-15), not left implicit
   - `payViaWallet_ticketAlreadyPaid` → `ValidationException` thrown
   - `payViaWallet_walletInactive` → `ValidationException` thrown
   - `getWalletBalance_success` — returns correct balance
-  - Verify: `./mvnw test -Dtest=WalletServiceImplTest` — all pass
+  - Verified: `./mvnw test -Dtest=WalletServiceImplTest` — 7/7 pass; full
+    `./mvnw test` — all green (`JwtUtilTest`'s earlier flaky failure from
+    S4-19 did not recur).
 
-- [ ] S4-21 — Postman verification sequence (in order):
+- [x] S4-21 — Postman verification sequence (in order):
   1. `POST /auth/register` → register test passenger
      (or use existing registered passenger from Sprint 2)
   2. `POST /auth/login` → get passenger token + store as `{{passengerToken}}`
@@ -404,6 +519,29 @@ written. Both are resolved in the Tasks section below (S4-15), not left implicit
   20. `POST /payments/wallet` same ticketId again (already PAID)
       → expect 400: "Ticket is not awaiting payment"
   - Add Ticket, Payment, Passenger folders to Postman collection
+  - **Verified (2026-07-30), run in Postman Desktop, not curl:** all 20 steps
+    passed. Added `Ticket` (7 requests), `Payment` (4 requests), `Passenger`
+    (4 requests) folders to `postman/BusLink-API.postman_collection.json`,
+    matching the existing collection's conventions (`pm.test`/
+    `pm.collectionVariables` in test scripts, `{{$guid}}` pre-request scripts
+    for fresh idempotency keys per ticket). Extended `Conductor Auth > Login`
+    to also capture `{{busId}}` and `User > QR Token` to capture `{{qrToken}}`
+    — both newly needed by `POST /tickets/issue`'s request body, neither
+    previously captured since no earlier sprint's flow needed them.
+  - Reused the existing `rider1@example.com` passenger (Sprint 2/3) rather
+    than registering a new one — confirms the plan's "or use existing
+    registered passenger" alternative works end-to-end too, not just the
+    fresh-registration path.
+  - The three wallet-balance changes needed at steps 4/18/19 (₹150, ₹20,
+    -₹80) were applied via `psql` against the live container, confirmed with
+    a `SELECT` before/after each, since no recharge endpoint exists yet
+    (Sprint 5 scope).
+  - Fare numbers matched exactly on the first run with no fixture guessing:
+    `HSR Layout` (stage 5) → `KR Puram Railway Station` (stage 10) on the
+    seeded Route 500K gives `stagesCrossed=6`, and for 2 adults + 1 child +
+    1 infant, `totalFare=90.00` — the same numbers the pre-existing `Fare`
+    folder already asserted, confirming `TicketServiceImpl`'s fare
+    calculation (S4-12) is consistent with `FareServiceImpl`'s (Sprint 3).
 
 ### Git
 
@@ -434,27 +572,60 @@ written. Both are resolved in the Tasks section below (S4-15), not left implicit
 
 ## Definition of Done
 
-- [ ] `idempotency_key` table exists in pgAdmin
-- [ ] `paid_at` and `origin_stop` columns present on `ticket` table in pgAdmin,
-      `source_stop` gone
-- [ ] `TicketStatus` includes `TERMINATED`
-- [ ] `POST /tickets/issue` creates ticket with status=ISSUED,
-      returns fare breakdown, stores idempotency key
-- [ ] Duplicate `POST /tickets/issue` with same `X-Idempotency-Key`
-      returns same ticketId without creating a new ticket
+- [ ] `idempotency_key` table exists in pgAdmin — only confirmed via
+      `psql \d idempotency_key` (S4-01) and Postman/DB behavior, never
+      visually checked in the pgAdmin UI itself. Same distinction Sprint 1
+      drew between a DDL-log check and an actual pgAdmin look — leaving
+      unchecked until done. Quick pgAdmin look-and-confirm, then this can
+      be ticked.
+- [ ] `paid_at` and `origin_stop` columns present on `ticket` table in
+      pgAdmin, `source_stop` gone — same caveat: confirmed via `psql \d
+      ticket` (S4-15), not the pgAdmin UI. Leaving unchecked for the same
+      reason as above.
+- [x] `TicketStatus` includes `TERMINATED` — enum value added (S4-15),
+      DB check constraint fixed to accept it (S4-15 gap fix), and a real
+      `TERMINATED` ticket created live via Postman (step 16).
+- [x] `POST /tickets/issue` creates ticket with status=ISSUED,
+      returns fare breakdown, stores idempotency key — verified live
+      (Postman step 6: `ISSUED`, `stagesCrossed=6`, `totalFare=90.00`) and
+      by `TicketServiceImplTest.issueTicket_success`.
+- [x] Duplicate `POST /tickets/issue` with same `X-Idempotency-Key`
+      returns same ticketId without creating a new ticket — verified live
+      (Postman step 7) and by `issueTicket_idempotentRequest`.
 - [ ] `GET /conductor/tickets/pending` returns only ISSUED tickets
-      for that conductor, ordered by issuedAt ASC
-- [ ] `PUT /tickets/{ticketId}/terminate` sets status=TERMINATED,
-      removes from pending list
-- [ ] `POST /payments/wallet` with sufficient balance → PAID,
-      wallet deducted, DEBIT transaction recorded
-- [ ] Overdraft: balance=₹20, fare=₹90 → allowed, balance=-₹70
-- [ ] Overdraft reject: balance=-₹80, fare=₹90 → 400 with clear message
-- [ ] `GET /passenger/tickets` returns ticket history newest first
-- [ ] `GET /passenger/wallet/balance` returns current balance
-- [ ] `GET /passenger/wallet/transactions` returns DEBIT transaction
-- [ ] Paying an already-PAID ticket returns 400
-- [ ] All 8 `TicketServiceImplTest` tests pass
-- [ ] All 7 `WalletServiceImplTest` tests pass
-- [ ] All 20 Postman verification calls pass
-- [ ] `feature/ticket-wallet-payment` merged into `dev`, build clean
+      for that conductor, ordered by issuedAt ASC — the "only ISSUED for
+      that conductor" half is verified (empty after pay/terminate,
+      non-empty while `ISSUED`, live in Postman steps 8/13/17). The
+      `ASC`-ordering half was never actually exercised with two or more
+      simultaneous pending tickets in the same response — every check this
+      sprint only ever had 0 or 1 pending ticket at a time. Leaving
+      unchecked rather than assuming the derived query name guarantees
+      correct behavior without having seen it.
+- [x] `PUT /tickets/{ticketId}/terminate` sets status=TERMINATED,
+      removes from pending list — verified live (Postman steps 16–17).
+- [x] `POST /payments/wallet` with sufficient balance → PAID,
+      wallet deducted, DEBIT transaction recorded — verified live (Postman
+      steps 10, 12: `PAID`, `walletBalanceAfter=60.00`, 1 `DEBIT` of
+      `90.00`).
+- [x] Overdraft: balance=₹20, fare=₹90 → allowed, balance=-₹70 — verified
+      live (Postman step 18).
+- [x] Overdraft reject: balance=-₹80, fare=₹90 → 400 with clear message —
+      verified live (Postman step 19).
+- [ ] `GET /passenger/tickets` returns ticket history newest first — only
+      ever checked with exactly 1 ticket present (Postman step 9), so the
+      "newest first" ordering claim specifically was never exercised
+      against 2+ tickets. Leaving unchecked for the same reason as the
+      pending-tickets ordering item above.
+- [x] `GET /passenger/wallet/balance` returns current balance — verified
+      live at 3 different balances (Postman steps 3, 11, and the
+      psql-driven checks at steps 4/18/19).
+- [x] `GET /passenger/wallet/transactions` returns DEBIT transaction —
+      verified live (Postman step 12: 1 `DEBIT`, `90.00`).
+- [x] Paying an already-PAID ticket returns 400 — verified live (Postman
+      step 20: `"Ticket is not awaiting payment"`).
+- [x] All 8 `TicketServiceImplTest` tests pass — verified (S4-19).
+- [x] All 7 `WalletServiceImplTest` tests pass — verified (S4-20).
+- [x] All 20 Postman verification calls pass — verified (S4-21, run in
+      Postman Desktop by the user, 2026-07-30).
+- [ ] `feature/ticket-wallet-payment` merged into `dev`, build clean — not
+      done yet, this is S4-22.

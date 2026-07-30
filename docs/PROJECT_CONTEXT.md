@@ -8,15 +8,16 @@ BusLink
 
 ## Current Sprint
 
-Sprint 3
+Sprint 4
 
 ## Current Objective
 
-Sprint 3 is closed. Introduced the Route domain end-to-end: updated `Route`/`Ticket`
-entities, a new `RouteStop` entity, conductor auth (`ROLE_CONDUCTOR`, separate from
-passenger), role-based `SecurityConfig`, a full Route/Fare/Bus service layer, admin
-and conductor-facing controllers, Route 500K seed data, unit tests, and Postman
-verification.
+Sprint 4 is closed. Built the full ticket issuance and wallet payment flow end-to-end:
+`IdempotencyKey` entity/repository, `Ticket`/`TicketStatus` updates (`originStop` rename,
+`paidAt`, `TERMINATED`), `TicketService`/`WalletService` + impls, conductor-facing
+(`TicketController`) and passenger-facing (`PassengerController`, `PaymentController`)
+REST APIs, unit tests, and Postman verification (run in Postman Desktop by the user,
+guided step-by-step rather than driven by the assistant via curl).
 
 ## Completed
 
@@ -46,6 +47,14 @@ verification.
 - ✓ `DataSeeder` — Route 500K, 29 stops, 1 bus, 1 conductor, idempotent on a non-empty `route` table
 - ✓ `FareServiceImplTest` (5), `RouteServiceImplTest` (8) — all passing
 - ✓ Postman verification — Conductor Auth/Route/Fare/Admin folders, all assertions passing against live app + DB
+- ✓ `IdempotencyKey` entity/repository, `TicketRepository`/`TransactionRepository`/`PaymentRepository`
+- ✓ `Ticket` entity updates (`sourceStop`→`originStop` rename, `paidAt`), `TicketStatus.TERMINATED` (plus a DB check-constraint gap caught and fixed — `ddl-auto=update` doesn't alter existing constraints)
+- ✓ `WalletProperties`/`TicketProperties` (`@ConfigurationProperties` records) for overdraft limit and idempotency TTL
+- ✓ `TicketService`/`TicketServiceImpl` — idempotent ticket issuance (full conductor/bus/route/stop validation chain + fare calc), pending-list, terminate, passenger ticket history/detail
+- ✓ `WalletService`/`WalletServiceImpl` — wallet payment with overdraft support and optimistic-lock-protected deduction, balance/transaction-history reads
+- ✓ `TicketController`, `PassengerController`, `PaymentController` — 8 new REST endpoints, all role-gated via `SecurityConfig`
+- ✓ `TicketServiceImplTest` (8), `WalletServiceImplTest` (7) — all passing
+- ✓ Postman verification — `Ticket`/`Payment`/`Passenger` folders (15 new requests), all 20 verification steps passing, run in Postman Desktop against a live app + DB
 
 ## Current Architecture
 
@@ -65,11 +74,32 @@ Docker Compose.
 
 ## Next Planned Milestone
 
-Sprint 4 — not yet planned. Likely scope: ticket issuance flow and wallet deduction
-(both explicitly out of Sprint 3 scope), possibly real admin authentication (no
-`ROLE_ADMIN` login path exists yet — see Notes below). Payment flows remain Sprint 5,
-Redis caching Sprint 6, Flyway remains deferred. Sprint plan to be drafted in Notion,
-then `docs/sprints/Sprint-04.md` generated once approved.
+Sprint 5 — not yet planned. Likely scope: UPI/card payment gateway integration, wallet
+recharge (no recharge endpoint exists yet — Sprint 4's Postman verification had to top
+up wallets via direct `psql` updates), overdraft recovery on recharge, and possibly real
+admin authentication (no `ROLE_ADMIN` login path exists yet — see Notes below). Redis
+caching remains Sprint 6, ticket-expiry scheduler Sprint 7, Flyway remains deferred.
+Sprint plan to be drafted in Notion, then `docs/sprints/Sprint-05.md` generated once
+approved.
+
+**Sprint 4 — closed (2026-07-30).** 12 of 16 Definition of Done items verified
+individually and checked; 4 left honestly unchecked rather than rubber-stamped:
+`idempotency_key` table and the `ticket` table's `paid_at`/`origin_stop`/`source_stop`
+changes were confirmed via `psql \d`, not an actual look in the pgAdmin UI (same
+DDL-log-vs-pgAdmin distinction Sprint 1 drew); the `GET /conductor/tickets/pending`
+ordering (`ASC` by `issuedAt`) and `GET /passenger/tickets` ordering ("newest first")
+claims were never exercised against 2+ simultaneous entries in this sprint's testing,
+only ever 0 or 1 at a time. The merge item itself was pending until this closure. All 8
+`TicketServiceImplTest` and 7 `WalletServiceImplTest` tests passing, all 20 Postman
+verification steps passing (run in Postman Desktop by the user this time, not
+curl-driven by the assistant — see `docs/DEVELOPMENT_LOG.md` for why that changed
+mid-sprint). One DB-level gap caught and fixed beyond the plan's own text: a Sprint-1-era
+Hibernate-generated `ticket_status_check` constraint still only allowed the original 4
+`TicketStatus` values — `ddl-auto=update` never touches existing constraints, so adding
+`TERMINATED` to the Java enum alone would have compiled and passed mocked tests while
+failing at the DB layer the first time a real `terminate` call tried to persist it;
+proved with a rollback-wrapped `INSERT` before fixing it via `psql`.
+`feature/ticket-wallet-payment` merged into `dev`, build clean.
 
 **Sprint 3 — closed (2026-07-26).** All Definition of Done items verified
 individually: `route`/`route_stop`/`ticket` schema changes confirmed in pgAdmin,
@@ -112,3 +142,4 @@ with the rest of the auth flow as one coherent unit rather than a stub built twi
 - `backend/` (and `docs/`, `infrastructure/`) committed and pushed to GitHub (`buslink` monorepo); branch strategy (`main` → `dev` → `feature/*`) is in place: `dev` is the integration branch where feature branches land and accumulate, `main` only ever merges from `dev` (not directly from feature branches). Sprint 1 merged from `feature/project-setup` into `dev` (`ae3d60e`). Sprint 2 merged from `feature/auth-register-login-refresh-uerProfile-QR-generation` into `dev` (`4b7af17`), `dev` pushed to `origin/dev`; the feature branch's remote copy was left one commit behind since it's disposable after merge (no PR workflow in use).
 - Sprint 3: all doc-closure updates (this entry included) were committed on `feature/route-fare-conductor-auth` *before* merging into `dev` — a deliberate change from Sprint 1/2's pattern (where the closure commit landed on `dev` right after merging, so it could cite the merge commit's hash). This means the merge commit hash isn't recorded here; `git log` on `dev` is authoritative for that.
 - `/admin/**` has no live authentication path as of Sprint 3 close — `AdminRouteController`/`AdminBusController` are fully implemented and correctly reject unauthenticated requests (`401`), but nothing can mint a `ROLE_ADMIN` JWT yet (no `Admin` entity/principal/login endpoint). Route 500K and all Sprint 3 seed data were created by `DataSeeder` bypassing the HTTP layer entirely, not through the admin API. Real admin auth is deferred, likely Sprint 4+ — same recipe as conductor auth (separate `UserDetailsService`, JWT role claim), not designed in detail yet.
+- No wallet-recharge endpoint exists as of Sprint 4 close — `POST /payments/wallet` can only *debit* an existing balance. Sprint 4's own Postman verification had to top up test wallets via direct `psql UPDATE` statements (₹150, then ₹20, then -₹80 for the overdraft tests) since there's no HTTP path to do it. Wallet recharge (and overdraft recovery on recharge) is explicit Sprint 5 scope.
