@@ -545,7 +545,9 @@ written. Both are resolved in the Tasks section below (S4-15), not left implicit
 
 ### Git
 
-- [ ] S4-22 — Commit and merge `feature/ticket-wallet-payment` into `dev`
+- [x] S4-22 — Commit and merge `feature/ticket-wallet-payment` into `dev`
+  — committed (`ce4a337`), merged with `--no-ff` (`ee41baa`), `./mvnw
+  compile` verified clean on `dev` post-merge.
 
 ---
 
@@ -627,5 +629,6 @@ written. Both are resolved in the Tasks section below (S4-15), not left implicit
 - [x] All 7 `WalletServiceImplTest` tests pass — verified (S4-20).
 - [x] All 20 Postman verification calls pass — verified (S4-21, run in
       Postman Desktop by the user, 2026-07-30).
-- [ ] `feature/ticket-wallet-payment` merged into `dev`, build clean — not
-      done yet, this is S4-22.
+- [x] `feature/ticket-wallet-payment` merged into `dev`, build clean —
+      merged with `--no-ff` (`ee41baa`), `./mvnw compile` verified clean on
+      `dev` post-merge.
