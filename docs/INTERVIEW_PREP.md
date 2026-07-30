@@ -454,3 +454,195 @@ A: The sprint's own **Scope** section (drafted before the detailed task list) na
 
 **Q: If the conductor app is meant to cache the full stop list locally at login (per this project's offline-first design goal), why do `searchStops`/`searchStopsAfter` exist as separate backend endpoints instead of the client just filtering its own cache?**
 A: They're the server-side source of truth the client's local cache gets built from, and the only way to verify the search/filter behavior at all before a real client exists (Postman exercises them directly). They aren't meant to be called per-keystroke by a well-built offline-capable client — a bus can lose connectivity mid-route, so the real destination-dropdown experience should filter the already-cached ~29 stops entirely client-side, not round-trip to the server on every character typed. At this route's actual scale (≤29 rows, indexed columns), even a naive per-keystroke caller wouldn't stress the backend — the real reason to avoid it is network reliability on a moving bus, not server load.
+
+---
+
+## Sprint 4
+
+### Idempotency
+
+**Q: What problem does `X-Idempotency-Key` actually solve on `POST /tickets/issue`, and why not just rely on the client not double-submitting?**
+A: A conductor's device is on a moving bus — a network blip mid-request means the client genuinely doesn't know if the server received it, so a retry is the *correct* client behavior, not a bug. Without idempotency, that retry creates a second ticket for the same boarding. The client generates a UUID once per logical issuance attempt and resends the *same* key on retry; the server treats "same key seen again" as "return what I already did," not "do it again."
+
+**Q: Walk through the idempotency check's three branches.**
+A:
+```
+ idempotencyKeyRepository.findByKey(key)
+              │
+     ┌────────┼─────────────────┐
+     │        │                 │
+  not found   found,         found,
+              expiresAt      expiresAt
+              in future      in the past
+     │        │                 │
+     ▼        ▼                 ▼
+  proceed   fetch the        delete the stale
+  normally  original ticket  key, proceed as
+            by its stored    a brand-new
+            ticketId, return request
+            it unchanged,
+            create nothing
+            new
+```
+The TTL (24h, `ticket.idempotency.ttl-hours`) exists so a key isn't held forever — a
+genuinely new issuance attempt reusing an old, expired key (unlikely, but the client
+UUID space is large, not zero) should be treated as new, not permanently blocked.
+
+**Q: Why store just `ticketId` on `IdempotencyKey` instead of caching the full response body?**
+A: The `Ticket` row is already the source of truth — storing a second, potentially
+stale copy of its shape would need to be kept in sync with the entity forever for no
+benefit. `IdempotencyKey` only needs to answer "have I seen this key, and if so, which
+ticket did it produce" — a foreign-key-shaped pointer, not a cache.
+
+**Q: This project already has `Wallet.version` (optimistic locking, Sprint 1) for protecting against concurrent double-writes. Why isn't that the same mechanism used for idempotency here?**
+A: They solve different problems. Optimistic locking protects a single row from being
+overwritten by two racing *writers* to the *same* record. Idempotency protects against
+one *logical* request being executed twice — the two `POST /tickets/issue` calls in
+this sprint's Postman flow aren't racing each other for the same row; they're the same
+conceptual request arriving twice, sequentially, and the second one shouldn't create a
+row at all. A version check can't express "don't do this a second time" — only
+"don't let a stale read win."
+
+### Spring Configuration Properties
+
+**Q: `WalletProperties`/`TicketProperties` are Java `record`s with `@ConfigurationProperties` — what's actually different from binding with a Lombok `@Getter`/`@Setter` POJO?**
+A: Records are immutable and use constructor binding — Spring populates every field via
+the canonical constructor at creation time, so there's no window where the object
+exists half-configured. A mutable POJO binds via setters called one at a time, which
+matters more for larger/nested config, but the immutability alone is reason enough for
+values (like an overdraft limit) that should never change after startup.
+
+**Q: A dotted property key like `wallet.overdraft.limit` failed to bind to a flat field `overdraftLimit` — no error, no exception, it just silently resolved to the default (`null`). Why does that happen instead of failing loudly?**
+A: Spring's relaxed binding equates casing styles (`camelCase`/`kebab-case`/
+`snake_case`) *within one property segment* — `overdraft-limit` and `overdraftLimit`
+are the same segment, just styled differently, so those bind fine. But a literal `.` in
+a key always means *another level of nesting* to the binder, never a word boundary —
+`wallet.overdraft.limit` describes a `wallet.overdraft` object with a `limit` field,
+which doesn't exist here. Since nothing *requires* every property to bind to something,
+an unmatched key is just silently ignored rather than erroring — which is exactly why
+this class of bug doesn't show up until runtime (an NPE deep inside business logic),
+not at startup. Proved this empirically — re-ran the same binding test with the
+original dotted key and confirmed it really does resolve to `null` — rather than just
+asserting it from reading the binder's docs.
+
+### JPA / Hibernate Gotchas
+
+**Q: Adding `TicketStatus.TERMINATED` to the Java enum compiled fine and passed every mocked unit test, but broke at the database layer the first time a real terminate call ran. What was actually going on?**
+A: Hibernate had generated a `CHECK` constraint on the `status` column back when the
+table was first created (`ddl-auto=create`, Sprint 1), hardcoded to the enum's literal
+values *at that point in time*. `ddl-auto=update` — used for every schema change since —
+only ever adds new tables/columns; it never inspects or alters an existing constraint.
+So the Java-side enum and the DB-side constraint silently drifted apart the moment a
+5th value was added, and nothing in the compile-and-test pipeline could catch it,
+because mocked repositories never touch a real constraint at all.
+```
+ Sprint 1 (ddl-auto=create):
+   CHECK (status IN ('ISSUED','PAID','EXPIRED','CANCELLED'))    ← baked in once
+
+ Sprint 4 (ddl-auto=update):
+   TicketStatus.TERMINATED added to the Java enum                ← compiles fine
+   ddl-auto=update adds new COLUMNS only, never touches           ← constraint
+   an existing CHECK constraint                                     unchanged
+
+ First real terminateTicket() call:
+   UPDATE ticket SET status='TERMINATED' ...
+   ──► ERROR: violates check constraint "ticket_status_check"     ← only surfaces
+                                                                       against a
+                                                                       real DB
+```
+**Q: How was this actually confirmed as a real bug rather than a theoretical one, before spending time fixing it?**
+A: A rollback-wrapped `INSERT ... status='TERMINATED'` run directly against Postgres —
+`BEGIN; INSERT ...; ROLLBACK;` — reproduces the exact failure with zero risk of leaving
+bad data behind, and proves the gap empirically rather than by reading the schema and
+assuming. Same "prove it before fixing it" pattern as the earlier `WalletProperties`
+dotted-key gap.
+
+### Concurrency in Practice
+
+**Q: `Wallet.version` (`@Version`) was added all the way back in Sprint 1, purely as a designed-in protection. What changed in Sprint 4?**
+A: Sprint 4 is the first time `WalletServiceImpl.payViaWallet()` actually performs a
+real read-modify-write against `Wallet.balance` — before this sprint, nothing in the
+codebase ever wrote to a wallet after its initial zero-balance creation at registration.
+The optimistic-lock protection existed unexercised for 3 sprints; this is the sprint
+where it does real work. No new locking code was needed at all — `walletRepository
+.save(wallet)` automatically throws `ObjectOptimisticLockingFailureException` if
+another transaction already bumped the version, and `GlobalExceptionHandler` (wired in
+Sprint 2, before there was even anything to protect) turns that into a `409`.
+
+**Q: Why does `payViaWallet` allow the wallet balance to go *negative* (overdraft) instead of just rejecting any payment that would exceed the balance?**
+A: Real-world buses can't easily let a passenger un-board because their wallet is ₹5
+short of the fare — the trip already happened. An overdraft limit (`wallet.overdraft
+-limit`, default ₹100) lets the fare go through as long as `balance + overdraftLimit >=
+totalFare`, trading a small amount of collection risk for not stranding a passenger
+mid-journey. The check is a single comparison against an *effective* balance
+(`wallet.balance + overdraftLimit`), not two separate branches for "has enough" vs
+"needs overdraft" — the math is identical either way.
+
+### Domain & API Design
+
+**Q: `IssueTicketResponseDTO` and `TicketDetailResponseDTO` share almost every field (`ticketId`, fares, stops, status, `issuedAt`...) — why two DTOs instead of one shared shape?**
+A: They serve different audiences at different moments. `IssueTicketResponseDTO` is
+what a *conductor* sees the instant they issue a ticket — no need for
+`conductorName`/`busNumber`/`routeNumber` since the conductor already knows those about
+themselves. `TicketDetailResponseDTO` is what a *passenger* sees later, reviewing
+history — they need that context spelled out, plus `paidAt`, which doesn't exist yet at
+issuance time. Reusing one DTO for both would either force wasted enrichment lookups on
+every issuance (irrelevant to the conductor) or leave the passenger view missing
+context it actually needs. Same reasoning `TicketDetailResponseDTO`'s design doc
+entry from S4-09 gives — a dedicated DTO per view, not one shape stretched to fit two.
+
+**Q: Walk through `issueTicket`'s full validation chain, in order — what does each check actually prevent?**
+A:
+```
+ POST /tickets/issue  (X-Idempotency-Key header + body)
+              │
+              ▼
+ idempotency check           ← prevents a network retry double-issuing
+              │
+              ▼
+ userRepository.findByQrToken   not found?  ──► 404 "Passenger not found"
+              │
+              ▼
+ passenger.status == ACTIVE?    no?         ──► 400 "not active"
+              │
+              ▼
+ conductor.busId == request.busId?  no?     ──► 400 "Bus mismatch"
+              │                                  (prevents a conductor issuing
+              ▼                                   tickets for another bus's route)
+ bus.routeId == request.routeId?    no?     ──► 400 "Route mismatch"
+              │
+              ▼
+ origin/destination stops exist on route?  no? ──► 404
+              │
+              ▼
+ destination.stopSequence > origin's?  no?  ──► 400 "must be after origin"
+              │
+              ▼
+ calculate fare, save Ticket (ISSUED), save IdempotencyKey    [@Transactional]
+              │
+              ▼
+ 200 OK  IssueTicketResponseDTO
+```
+Six independent guards before a single row is written — each one closes off a
+different way a malformed or malicious request could otherwise corrupt state (a
+passenger issuing themself a ticket, a conductor billing another bus's route, a
+backwards fare calculation from a reversed origin/destination).
+
+### Testing Strategy
+
+**Q: `TicketServiceImplTest` mocks 8 collaborators (7 repositories + `TicketProperties`) for one class — is that a smell?**
+A: It reflects the real complexity of `issueTicket`'s validation chain — 6 different
+domain concepts (passenger, conductor, bus, route, stop, idempotency key) genuinely
+need to be checked before a ticket can be created, and each is its own repository.
+Mocking all of them is the correct unit-test shape for that; the alternative (fewer
+collaborators) would mean the validation logic itself was under-decomposed, not that
+the test has too many mocks. The real signal to watch for is whether *tests* start
+needing excessive setup to reach one specific branch — here each test still only stubs
+the 2–4 calls relevant to what it's actually checking.
+
+**Q: `TicketProperties` is a `record`, and the test mocks it with `@Mock`. Records are implicitly `final` — doesn't Mockito normally refuse to mock final classes?**
+A: That restriction is from Mockito's *classic* mock maker (`mockito-core` pre-5.0),
+which needed the separate `mockito-inline` artifact to mock final classes/methods.
+Since Mockito 5.0, the inline mock maker is the *default* — no extra dependency, no
+extra setup, `@Mock` on a `record` just works. Worth knowing as a version-specific fact,
+not a general Mockito truth — an older project on Mockito 3/4 would need the extra step.

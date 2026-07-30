@@ -1,15 +1,81 @@
-{
+  {
   "info": {
     "_postman_id": "c56b0cb3-6605-4eb7-aadf-b7616de42023",
     "name": "BusLink API",
-    "description": "Sprint 2 — passenger auth (register/login/refresh) and profile/QR endpoints. Sprint 3 — conductor auth, route/stop/fare APIs. Import into Postman Desktop. Run Auth > Login at least once to populate {{accessToken}} before hitting User; run Conductor Auth > Login at least once to populate {{conductorAccessToken}} and {{routeId}} before hitting Route/Fare.",
+    "description": "Sprint 2 \u2014 passenger auth (register/login/refresh) and profile/QR endpoints. Sprint 3 \u2014 conductor auth, route/stop/fare APIs. Import into Postman Desktop. Run Auth > Login at least once to populate {{accessToken}} before hitting User; run Conductor Auth > Login at least once to populate {{conductorAccessToken}} and {{routeId}} before hitting Route/Fare. Sprint 4 \u2014 ticket issuance and wallet payment APIs. Run Conductor Auth > Login and User > QR Token at least once to populate {{routeId}}, {{busId}}, and {{qrToken}} before hitting Ticket/Payment.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "baseUrl", "value": "http://localhost:8080", "type": "string" },
-    { "key": "accessToken", "value": "", "type": "string" },
-    { "key": "conductorAccessToken", "value": "", "type": "string" },
-    { "key": "routeId", "value": "", "type": "string" }
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080",
+      "type": "string"
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "conductorAccessToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "routeId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "qrToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "busId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "ticketId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "ticketIdempotencyKey",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "ticketId2",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "ticketIdempotencyKey2",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "overdraftTicketId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "overdraftIdempotencyKey",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "overdraftRejectTicketId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "overdraftRejectIdempotencyKey",
+      "value": "",
+      "type": "string"
+    }
   ],
   "item": [
     {
@@ -21,7 +87,10 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -29,8 +98,13 @@
             },
             "url": {
               "raw": "{{baseUrl}}/auth/register",
-              "host": ["{{baseUrl}}"],
-              "path": ["auth", "register"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
             }
           },
           "response": []
@@ -63,7 +137,10 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -71,8 +148,13 @@
             },
             "url": {
               "raw": "{{baseUrl}}/auth/login",
-              "host": ["{{baseUrl}}"],
-              "path": ["auth", "login"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
             }
           },
           "response": []
@@ -83,7 +165,10 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -91,8 +176,13 @@
             },
             "url": {
               "raw": "{{baseUrl}}/auth/refresh",
-              "host": ["{{baseUrl}}"],
-              "path": ["auth", "refresh"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "refresh"
+              ]
             }
           },
           "response": []
@@ -108,32 +198,69 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/user/profile",
-              "host": ["{{baseUrl}}"],
-              "path": ["user", "profile"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "user",
+                "profile"
+              ]
             }
           },
           "response": []
         },
         {
-
           "id": "3fcde7d0-08ad-42b9-b362-b08dca8d81c5",
           "name": "QR Token",
           "request": {
             "method": "GET",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/user/qr",
-              "host": ["{{baseUrl}}"],
-              "path": ["user", "qr"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "user",
+                "qr"
+              ]
             }
           },
-          "response": []
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.success && body.data) {",
+                  "    pm.collectionVariables.set('qrToken', body.data);",
+                  "}",
+                  "",
+                  "pm.test('QR token request returned 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('qrToken captured', function () {",
+                  "    pm.expect(pm.collectionVariables.get('qrToken')).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
@@ -157,6 +284,9 @@
                   "    if (body.data.routeId) {",
                   "        pm.collectionVariables.set('routeId', body.data.routeId);",
                   "    }",
+                  "    if (body.data.busId) {",
+                  "        pm.collectionVariables.set('busId', body.data.busId);",
+                  "    }",
                   "}",
                   "",
                   "pm.test('Login returned 200', function () {",
@@ -169,6 +299,10 @@
                   "",
                   "pm.test('routeId is non-null', function () {",
                   "    pm.expect(pm.collectionVariables.get('routeId')).to.not.be.empty;",
+                  "});",
+                  "",
+                  "pm.test('busId is non-null', function () {",
+                  "    pm.expect(pm.collectionVariables.get('busId')).to.not.be.empty;",
                   "});"
                 ]
               }
@@ -177,7 +311,10 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -185,8 +322,14 @@
             },
             "url": {
               "raw": "{{baseUrl}}/conductor/auth/login",
-              "host": ["{{baseUrl}}"],
-              "path": ["conductor", "auth", "login"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "conductor",
+                "auth",
+                "login"
+              ]
             }
           },
           "response": []
@@ -223,12 +366,21 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{conductorAccessToken}}" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{conductorAccessToken}}"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/routes/{{routeId}}/stops",
-              "host": ["{{baseUrl}}"],
-              "path": ["routes", "{{routeId}}", "stops"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "routes",
+                "{{routeId}}",
+                "stops"
+              ]
             }
           },
           "response": []
@@ -254,13 +406,27 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{conductorAccessToken}}" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{conductorAccessToken}}"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/routes/{{routeId}}/stops?search=H",
-              "host": ["{{baseUrl}}"],
-              "path": ["routes", "{{routeId}}", "stops"],
-              "query": [{ "key": "search", "value": "H" }]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "routes",
+                "{{routeId}}",
+                "stops"
+              ],
+              "query": [
+                {
+                  "key": "search",
+                  "value": "H"
+                }
+              ]
             }
           },
           "response": []
@@ -286,15 +452,30 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{conductorAccessToken}}" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{conductorAccessToken}}"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/routes/{{routeId}}/stops?after=HSR Layout&search=K",
-              "host": ["{{baseUrl}}"],
-              "path": ["routes", "{{routeId}}", "stops"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "routes",
+                "{{routeId}}",
+                "stops"
+              ],
               "query": [
-                { "key": "after", "value": "HSR Layout" },
-                { "key": "search", "value": "K" }
+                {
+                  "key": "after",
+                  "value": "HSR Layout"
+                },
+                {
+                  "key": "search",
+                  "value": "K"
+                }
               ]
             }
           },
@@ -319,12 +500,21 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/routes/{{routeId}}/stops",
-              "host": ["{{baseUrl}}"],
-              "path": ["routes", "{{routeId}}", "stops"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "routes",
+                "{{routeId}}",
+                "stops"
+              ]
             }
           },
           "response": []
@@ -357,18 +547,42 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{conductorAccessToken}}" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{conductorAccessToken}}"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/routes/{{routeId}}/fare?origin=HSR Layout&destination=KR Puram Railway Station&adults=2&children=1&infants=1",
-              "host": ["{{baseUrl}}"],
-              "path": ["routes", "{{routeId}}", "fare"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "routes",
+                "{{routeId}}",
+                "fare"
+              ],
               "query": [
-                { "key": "origin", "value": "HSR Layout" },
-                { "key": "destination", "value": "KR Puram Railway Station" },
-                { "key": "adults", "value": "2" },
-                { "key": "children", "value": "1" },
-                { "key": "infants", "value": "1" }
+                {
+                  "key": "origin",
+                  "value": "HSR Layout"
+                },
+                {
+                  "key": "destination",
+                  "value": "KR Puram Railway Station"
+                },
+                {
+                  "key": "adults",
+                  "value": "2"
+                },
+                {
+                  "key": "children",
+                  "value": "1"
+                },
+                {
+                  "key": "infants",
+                  "value": "1"
+                }
               ]
             }
           },
@@ -398,7 +612,10 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -406,11 +623,802 @@
             },
             "url": {
               "raw": "{{baseUrl}}/admin/routes",
-              "host": ["{{baseUrl}}"],
-              "path": ["admin", "routes"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "routes"
+              ]
             }
           },
           "response": []
+        }
+      ]
+    },
+    {
+      "name": "Ticket",
+      "item": [
+        {
+          "id": "a758052d-623b-40b0-a691-3a770278583a",
+          "name": "Issue Ticket",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{conductorAccessToken}}"
+              },
+              {
+                "key": "X-Idempotency-Key",
+                "value": "{{ticketIdempotencyKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tickets/issue",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tickets",
+                "issue"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"qrToken\": \"{{qrToken}}\",\n  \"busId\": \"{{busId}}\",\n  \"routeId\": \"{{routeId}}\",\n  \"originStop\": \"HSR Layout\",\n  \"destinationStop\": \"KR Puram Railway Station\",\n  \"adults\": 2,\n  \"children\": 1,\n  \"infants\": 1\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('ticketIdempotencyKey', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.success && body.data && body.data.ticketId) {",
+                  "    pm.collectionVariables.set('ticketId', body.data.ticketId);",
+                  "}",
+                  "",
+                  "pm.test('Issue ticket returned 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Ticket status is ISSUED', function () {",
+                  "    pm.expect(body.data.status).to.eql('ISSUED');",
+                  "});",
+                  "",
+                  "pm.test('Fare calculated correctly (stagesCrossed=6, totalFare=90)', function () {",
+                  "    pm.expect(body.data.stagesCrossed).to.eql(6);",
+                  "    pm.expect(parseFloat(body.data.totalFare)).to.eql(90);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "4fa68a43-3b4b-4a9a-baff-da3197c184a7",
+          "name": "Issue Ticket (Duplicate - Idempotency Check)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{conductorAccessToken}}"
+              },
+              {
+                "key": "X-Idempotency-Key",
+                "value": "{{ticketIdempotencyKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tickets/issue",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tickets",
+                "issue"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"qrToken\": \"{{qrToken}}\",\n  \"busId\": \"{{busId}}\",\n  \"routeId\": \"{{routeId}}\",\n  \"originStop\": \"HSR Layout\",\n  \"destinationStop\": \"KR Puram Railway Station\",\n  \"adults\": 2,\n  \"children\": 1,\n  \"infants\": 1\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Duplicate issue request returned 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Duplicate request returns the SAME ticketId (idempotency)', function () {",
+                  "    pm.expect(body.data.ticketId).to.eql(pm.collectionVariables.get('ticketId'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "59cbea49-2a77-48cd-9493-b4f4262ec2e9",
+          "name": "Get Pending Tickets",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{conductorAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/conductor/tickets/pending",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "conductor",
+                "tickets",
+                "pending"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Pending tickets returned 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response data is an array', function () {",
+                  "    pm.expect(body.data).to.be.an('array');",
+                  "});",
+                  "",
+                  "if (body.data.length > 0) {",
+                  "    pm.test('minutesSinceIssue is non-negative', function () {",
+                  "        pm.expect(body.data[0].minutesSinceIssue).to.be.at.least(0);",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "d6a8a9b2-8322-431f-9b99-3242b29834e3",
+          "name": "Issue Second Ticket (For Terminate Flow)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{conductorAccessToken}}"
+              },
+              {
+                "key": "X-Idempotency-Key",
+                "value": "{{ticketIdempotencyKey2}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tickets/issue",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tickets",
+                "issue"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"qrToken\": \"{{qrToken}}\",\n  \"busId\": \"{{busId}}\",\n  \"routeId\": \"{{routeId}}\",\n  \"originStop\": \"HSR Layout\",\n  \"destinationStop\": \"KR Puram Railway Station\",\n  \"adults\": 2,\n  \"children\": 1,\n  \"infants\": 1\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('ticketIdempotencyKey2', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.success && body.data && body.data.ticketId) {",
+                  "    pm.collectionVariables.set('ticketId2', body.data.ticketId);",
+                  "}",
+                  "",
+                  "pm.test('Second ticket issued (200, ISSUED)', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(body.data.status).to.eql('ISSUED');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "ec6e57ea-5d13-4b82-bf1d-9d31ce0261a4",
+          "name": "Terminate Ticket",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{conductorAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tickets/{{ticketId2}}/terminate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tickets",
+                "{{ticketId2}}",
+                "terminate"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Terminate returned 200 with status TERMINATED', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(body.data.status).to.eql('TERMINATED');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "49ba7f35-28b9-41be-a71a-e364ff704a84",
+          "name": "Issue Ticket (For Overdraft Allowed)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{conductorAccessToken}}"
+              },
+              {
+                "key": "X-Idempotency-Key",
+                "value": "{{overdraftIdempotencyKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tickets/issue",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tickets",
+                "issue"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"qrToken\": \"{{qrToken}}\",\n  \"busId\": \"{{busId}}\",\n  \"routeId\": \"{{routeId}}\",\n  \"originStop\": \"HSR Layout\",\n  \"destinationStop\": \"KR Puram Railway Station\",\n  \"adults\": 2,\n  \"children\": 1,\n  \"infants\": 1\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('overdraftIdempotencyKey', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.success && body.data && body.data.ticketId) {",
+                  "    pm.collectionVariables.set('overdraftTicketId', body.data.ticketId);",
+                  "}",
+                  "",
+                  "pm.test('Overdraft-test ticket issued (200, ISSUED, totalFare=90)', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(body.data.status).to.eql('ISSUED');",
+                  "    pm.expect(parseFloat(body.data.totalFare)).to.eql(90);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "1ce2dd81-2a4f-4236-b108-3e336f2e6469",
+          "name": "Issue Ticket (For Overdraft Reject)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{conductorAccessToken}}"
+              },
+              {
+                "key": "X-Idempotency-Key",
+                "value": "{{overdraftRejectIdempotencyKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tickets/issue",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tickets",
+                "issue"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"qrToken\": \"{{qrToken}}\",\n  \"busId\": \"{{busId}}\",\n  \"routeId\": \"{{routeId}}\",\n  \"originStop\": \"HSR Layout\",\n  \"destinationStop\": \"KR Puram Railway Station\",\n  \"adults\": 2,\n  \"children\": 1,\n  \"infants\": 1\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('overdraftRejectIdempotencyKey', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.success && body.data && body.data.ticketId) {",
+                  "    pm.collectionVariables.set('overdraftRejectTicketId', body.data.ticketId);",
+                  "}",
+                  "",
+                  "pm.test('Overdraft-reject-test ticket issued (200, ISSUED, totalFare=90)', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(body.data.status).to.eql('ISSUED');",
+                  "    pm.expect(parseFloat(body.data.totalFare)).to.eql(90);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Payment",
+      "item": [
+        {
+          "id": "4bd64ae9-b5ac-40ca-9508-0ad4429d72d2",
+          "name": "Pay Via Wallet",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payments/wallet",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "wallet"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ticketId\": \"{{ticketId}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Payment succeeded (200, PAID, balance=60.00)', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(body.data.ticketStatus).to.eql('PAID');",
+                  "    pm.expect(parseFloat(body.data.walletBalanceAfter)).to.eql(60);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "37c5a2cf-2568-4f6c-a221-403f36665144",
+          "name": "Pay Via Wallet (Overdraft Allowed)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payments/wallet",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "wallet"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ticketId\": \"{{overdraftTicketId}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Overdraft payment succeeded (200, balance=-70.00)', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(parseFloat(body.data.walletBalanceAfter)).to.eql(-70);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "14bdada5-7573-4a8e-8491-82f65736e563",
+          "name": "Pay Via Wallet (Overdraft Reject)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payments/wallet",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "wallet"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ticketId\": \"{{overdraftRejectTicketId}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Payment rejected for exceeding overdraft (400)', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "    pm.expect(body.message).to.include('Insufficient balance');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "d0092023-8c8e-4c14-b075-3e8666b68e1d",
+          "name": "Pay Via Wallet (Already Paid)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payments/wallet",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "wallet"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ticketId\": \"{{overdraftTicketId}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Paying an already-PAID ticket returns 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "    pm.expect(body.message).to.eql('Ticket is not awaiting payment');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Passenger",
+      "item": [
+        {
+          "id": "ae596328-3dfa-4c60-9b5a-930011e96814",
+          "name": "Get My Tickets",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/passenger/tickets",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "passenger",
+                "tickets"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Ticket history returned 200 as an array', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(body.data).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "23ba159f-9edf-4e04-b3cc-5516a550866f",
+          "name": "Get Ticket By Id",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/passenger/tickets/{{ticketId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "passenger",
+                "tickets",
+                "{{ticketId}}"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Ticket detail returned 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Ticket is PAID with a non-null paidAt', function () {",
+                  "    pm.expect(body.data.status).to.eql('PAID');",
+                  "    pm.expect(body.data.paidAt).to.not.be.null;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "d3d2e773-249c-417f-b1bd-eba09b39734f",
+          "name": "Get Wallet Balance",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/passenger/wallet/balance",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "passenger",
+                "wallet",
+                "balance"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Wallet balance returned 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "3492b8ea-7378-489e-8161-04c88d9f0b9c",
+          "name": "Get Wallet Transactions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/passenger/wallet/transactions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "passenger",
+                "wallet",
+                "transactions"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Transaction history returned 200 as an array', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(body.data).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
         }
       ]
     }

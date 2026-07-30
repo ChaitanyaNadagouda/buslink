@@ -290,3 +290,148 @@ Completed
   no-token `/admin/**` correctly rejected (`401`), all 13 unit tests
   passing, all Postman assertions passing. `feature/route-fare-conductor-auth`
   to be merged into `dev` next (S3-32).
+
+---
+
+# Sprint 4
+
+## New Entity, Repositories, Config & DTOs (2026-07-29)
+
+Completed
+
+- S4-01: `IdempotencyKey` entity (`entity/`) — `key` (String PK, client-sent,
+  no `@GeneratedValue`), `ticketId`, `createdAt`, `expiresAt`. Doesn't extend
+  `BaseEntity` — both timestamps set explicitly together by the service layer
+  at write time, not split between Hibernate auto-stamping and manual
+  computation.
+- S4-02/03/04/05: `TicketRepository`, `TransactionRepository`,
+  `PaymentRepository`, `IdempotencyKeyRepository`. **Gap found and fixed:**
+  the plan asked for `PaymentRepository.findByTicketId`, but `Payment`
+  (Sprint 1) has no `ticketId` field — only a generic `referenceId`,
+  deliberately generic since a `Payment` isn't always ticket-related (e.g. a
+  future wallet top-up). Would have failed at startup with
+  `PropertyReferenceException`. Confirmed with the user, implemented as
+  `findByReferenceId` instead.
+- S4-06: Wallet overdraft config. **Gap found and fixed:** the plan's
+  property key was dotted (`wallet.overdraft.limit`) alongside a flat
+  `overdraftLimit` field — those don't bind together under Spring's relaxed
+  binding (a literal `.` always means another nesting level, never a
+  word-boundary), so `overdraftLimit` would have silently resolved to `null`
+  with no error. Fixed with a kebab-case flat key (`wallet.overdraft-limit`).
+  `WalletProperties` built as a `record` (`@ConfigurationProperties`), not a
+  Lombok POJO — idiomatic for immutable config. Verified two ways: compile
+  success, and a dedicated `WalletPropertiesTest`
+  (`ApplicationContextRunner`) that also empirically re-confirmed the
+  *original* dotted key really does bind to `null` before removing that
+  proof.
+- S4-07: idempotency TTL config (`ticket.idempotency.ttl-hours=24`).
+- S4-08: `IssueTicketRequestDTO`, `WalletPaymentRequestDTO` — the latter
+  deliberately excludes `userId` (comes from the authenticated principal)
+  and `amount` (service computes it from `ticket.totalFare`), never trusting
+  either from the client.
+- S4-09: 6 response DTOs — `IssueTicketResponseDTO`, `PendingTicketResponseDTO`,
+  `WalletPaymentResponseDTO`, `TicketDetailResponseDTO`,
+  `WalletBalanceResponseDTO`, `TransactionResponseDTO`.
+- S4-10: `SecurityConfig` — added `POST /tickets/issue`, `PUT
+  /tickets/*/terminate`, `POST /payments/wallet`, `GET /passenger/**` role
+  rules. **Gap found:** `GET /conductor/tickets/**` needed no new rule —
+  already covered by the existing Sprint 3 `/conductor/**` rule, which
+  applies to all HTTP methods under that path; adding an explicit duplicate
+  would have been dead code. Verified live: existing auth flows (no-token
+  `401`s, conductor login) unaffected by the new rules.
+
+## Ticket Entity Updates & Service Layer (2026-07-29)
+
+Completed
+
+- S4-15: `Ticket.sourceStop` → `originStop` rename (grepped first — no
+  references outside the entity itself), added `paidAt` (nullable), added
+  `TicketStatus.TERMINATED`. **Gap found and fixed, unrelated to the
+  rename:** a Hibernate-generated `ticket_status_check` constraint from
+  Sprint 1's `ddl-auto=create` still only allowed the original 4 enum
+  values — `ddl-auto=update` never alters existing constraints, so
+  `TERMINATED` would compile and pass mocked tests while failing at the DB
+  layer the first time `terminateTicket()` actually persisted it. Proved
+  with a rollback-wrapped `INSERT ... status='TERMINATED'` before fixing it
+  via `psql` (drop + recreate the constraint with all 5 values). Verified:
+  app restart after the schema/constraint changes shows zero diff.
+- S4-11/12: `TicketService`/`TicketServiceImpl` — `issueTicket` (idempotency
+  check → QR lookup → passenger-active check → conductor's-bus-matches
+  check → bus's-route-matches check → stop existence + ordering check →
+  fare calc → save + idempotency key), `getPendingTickets`,
+  `terminateTicket`, `getPassengerTickets`, `getTicketById`. **Gap found
+  and fixed:** the plan's own pseudocode hardcoded the idempotency key TTL
+  as `now + 24hrs`, even though S4-07 had already added a config property
+  for exactly that value — building it as written would leave that config
+  dead. Added `TicketProperties` (mirrors `WalletProperties`), verified its
+  binding with a dedicated `TicketPropertiesTest`.
+- S4-13/14: `WalletService`/`WalletServiceImpl` — `payViaWallet` (ticket/
+  wallet validation → overdraft check → deduction → `Transaction` record →
+  ticket → `PAID`), `getWalletBalance`, `getTransactionHistory`. No manual
+  locking code needed — `Wallet.version` (`@Version`, Sprint 1) makes
+  `walletRepository.save()` fail automatically on a concurrent write,
+  already mapped to `409` by `GlobalExceptionHandler` since Sprint 2.
+
+## Controllers & Unit Tests (2026-07-29)
+
+Completed
+
+- S4-16/17/18: `TicketController` (no class-level `@RequestMapping` — its
+  3 endpoints don't share a path root), `PassengerController`,
+  `PaymentController`. `X-Idempotency-Key` read via
+  `@RequestHeader(required=false)` + a manual check throwing
+  `ValidationException`, not `required=true` — Spring's own missing-header
+  rejection bypasses `GlobalExceptionHandler` and wouldn't come back in the
+  app's `ApiResponse` shape. Verified live: correct `401`s on all 3
+  controllers, correct `400` with the right message for a missing
+  idempotency header.
+- S4-19: `TicketServiceImplTest` — 8 tests (issue success/idempotent-
+  repeat/invalid-QR/inactive-passenger/bus-mismatch/destination-before-
+  origin, terminate success/already-paid). Needed `TicketProperties` as an
+  additional mock beyond the plan's list, since S4-12 added it as a
+  constructor dependency — Mockito 5.23.0 mocks records/final classes with
+  no extra setup. 8/8 pass; full suite 36/36 (one unrelated pre-existing
+  flaky `JwtUtilTest` test cleared on re-run).
+- S4-20: `WalletServiceImplTest` — 7 tests (sufficient-balance/overdraft-
+  allowed/overdraft-rejected payment, ticket-not-found/already-paid,
+  wallet-inactive, balance lookup). 7/7 pass; full suite green.
+
+## Postman Verification & Sprint Closure (2026-07-30)
+
+Completed
+
+- S4-21: 20-step live verification sequence. **Workflow change mid-sprint:**
+  started by driving the sequence via `curl` (matching how S4-10/S4-15/
+  S4-16–18 were verified earlier this sprint), but the user interrupted to
+  redo it in Postman Desktop themselves instead — matching the project's
+  own established pattern (Sprint 2/3 closures both explicitly ran
+  end-to-end verification in Postman Desktop). Test data created via the
+  earlier `curl` pass was cleaned up (deleted ticket/idempotency
+  key/wallet/user) before restarting cleanly. Built `Ticket` (7 requests),
+  `Payment` (4 requests), `Passenger` (4 requests) folders into
+  `postman/BusLink-API.postman_collection.json`, matching the collection's
+  existing conventions (`pm.test`/`pm.collectionVariables` in test scripts,
+  `{{$guid}}` pre-request scripts for fresh idempotency keys per ticket).
+  Extended `Conductor Auth > Login` to also capture `{{busId}}` and `User >
+  QR Token` to capture `{{qrToken}}` — both newly needed by `POST
+  /tickets/issue`, neither previously captured. All 20 steps passed,
+  guided step-by-step with the user running each request and the assistant
+  performing the 3 `psql` wallet-balance updates (steps 4/18/19) the flow
+  needs since no recharge endpoint exists yet. Reused the existing
+  `rider1@example.com` passenger from Sprint 2/3 rather than registering a
+  new one, confirming the plan's "or use existing" alternative works too.
+  Fare numbers matched exactly on the first run with no fixture
+  adjustment — the seeded Route 500K's `HSR Layout`→`KR Puram Railway
+  Station` numbers are the same ones the pre-existing `Fare` folder already
+  asserted, confirming `TicketServiceImpl`'s fare calculation is consistent
+  with `FareServiceImpl`'s from Sprint 3.
+- S4-22: doc updates (this entry, `PROJECT_CONTEXT.md`, `ARCHITECTURE.md`,
+  `API.md`, `INTERVIEW_PREP.md`) committed on `feature/ticket-wallet-payment`
+  before merging into `dev`, matching Sprint 3's closure-commit-before-merge
+  pattern.
+- **Sprint 4 declared complete (2026-07-30).** 12 of 16 Definition of Done
+  items verified individually and checked; 4 left honestly unchecked with
+  reasons rather than rubber-stamped — see `PROJECT_CONTEXT.md` for the
+  full breakdown (2 need an actual pgAdmin UI look rather than just `psql`,
+  2 ordering claims were never exercised against 2+ simultaneous entries in
+  this sprint's own testing).

@@ -47,7 +47,7 @@ public class Ticket extends BaseEntity {
     private UUID routeId;
 
     @Column(nullable = false)
-    private String sourceStop;
+    private String originStop;
 
     @Column(nullable = false)
     private String destinationStop;
@@ -82,4 +82,6 @@ public class Ticket extends BaseEntity {
 
     @Column(nullable = false)
     private Instant issuedAt;
+
+    private Instant paidAt;
 }

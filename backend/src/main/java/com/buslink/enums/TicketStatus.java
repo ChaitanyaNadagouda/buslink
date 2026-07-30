@@ -4,5 +4,6 @@ public enum TicketStatus {
     ISSUED,
     PAID,
     EXPIRED,
-    CANCELLED
+    CANCELLED,
+    TERMINATED
 }
