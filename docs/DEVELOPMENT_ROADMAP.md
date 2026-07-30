@@ -4,13 +4,13 @@
 Backend Foundation
 
 ## Active Sprint
-Sprint 3
+Sprint 4
 
 ## Sprint Status
-✅ Complete — awaiting Sprint 4 plan
+✅ Closed (2026-07-30) — `feature/ticket-wallet-payment` merged into `dev`, build clean. Pending merge into `main` (to be confirmed separately) and Sprint 5 planning.
 
 ## Active Sprint File
-docs/sprints/Sprint-03.md
+docs/sprints/Sprint-04.md
 
 ---
 

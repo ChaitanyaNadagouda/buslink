@@ -6,8 +6,11 @@ This document records every REST API developed in BusLink. Update it whenever a 
 
 Sprint 2 delivered the first 5 endpoints: passenger register/login/refresh (`Auth`) and
 profile/QR fetch (`User`). Sprint 3 added conductor auth, the full Route/Stop/Fare/Bus
-domain, and role-based access (`ROLE_PASSENGER`/`ROLE_CONDUCTOR`/`ROLE_ADMIN`). All
-follow the `ApiResponse<T>` envelope (`{success, message, data}`) on both success and
+domain, and role-based access (`ROLE_PASSENGER`/`ROLE_CONDUCTOR`/`ROLE_ADMIN`). Sprint 4
+added the ticket issuance and wallet payment flow: conductor-side issuance (with
+idempotency) and termination, passenger-side wallet payment (with overdraft support and
+optimistic-lock-protected deduction), and passenger-facing ticket/wallet read endpoints.
+All follow the `ApiResponse<T>` envelope (`{success, message, data}`) on both success and
 error paths. See `postman/BusLink-API.postman_collection.json` for a runnable collection.
 
 **Note on `/admin/**` endpoints:** every `Routes`/`Buses` admin endpoint below is fully
@@ -571,11 +574,292 @@ accepted given the domain's real fleet size; see `ARCHITECTURE.md`/`Sprint-03.md
 
 ## Tickets
 
-_No endpoints yet._
+### POST /tickets/issue
+
+**Purpose**
+Conductor issues a ticket for a scanned passenger. Validates the full chain — passenger
+`ACTIVE`, the issuing conductor's assigned bus matches `busId`, that bus's route matches
+`routeId`, both stops exist on the route, and destination is after origin — then
+calculates the fare and creates the ticket in `ISSUED` status. Payment is a **separate,
+later** step (`POST /payments/wallet`); this endpoint returns immediately without
+waiting for it.
+
+**Authentication Requirement**
+Bearer JWT, `ROLE_CONDUCTOR`.
+
+**Request**
+Header: `X-Idempotency-Key: <client-generated UUID>` — **required**. A retried request
+with the same key returns the original ticket instead of creating a duplicate (protects
+against a conductor's device retrying after a network blip, a real risk for a
+bus-mounted app).
+```json
+{
+  "qrToken": "a1b2c3d4e5f6...",
+  "busId": "<uuid>",
+  "routeId": "<uuid>",
+  "originStop": "HSR Layout",
+  "destinationStop": "KR Puram Railway Station",
+  "adults": 2,
+  "children": 1,
+  "infants": 1
+}
+```
+
+**Validation Rules**
+- `qrToken`, `busId`, `routeId`, `originStop`, `destinationStop` — required
+- `adults` — required, minimum `1` (a ticket must have at least one paying passenger)
+- `children`, `infants` — required, minimum `0`
+
+**Response** — `200 OK`
+```json
+{
+  "success": true,
+  "message": "Success",
+  "data": {
+    "ticketId": "<uuid>",
+    "userId": "<uuid>",
+    "originStop": "HSR Layout",
+    "destinationStop": "KR Puram Railway Station",
+    "stagesCrossed": 6,
+    "adults": 2,
+    "children": 1,
+    "infants": 1,
+    "adultFare": 36.00,
+    "childFare": 18.00,
+    "totalFare": 90.00,
+    "status": "ISSUED",
+    "issuedAt": "2026-07-29T13:07:38.632477Z"
+  }
+}
+```
+Duplicate request with the same `X-Idempotency-Key` (within its 24-hour TTL,
+`ticket.idempotency.ttl-hours`) returns this exact same body, `ticketId` included,
+without creating a second ticket. An expired key is treated as a brand-new request.
+
+**Error Codes**
+| Status | Condition |
+|---|---|
+| 400 | Missing `X-Idempotency-Key` header, OR `@Valid` failure, OR passenger not `ACTIVE`, OR conductor's bus doesn't match `busId`, OR bus's route doesn't match `routeId`, OR destination not after origin |
+| 404 | `qrToken` doesn't match any passenger, OR origin/destination stop doesn't exist on the route |
+| 401 / 403 | No token / wrong role |
+
+---
+
+### GET /conductor/tickets/pending
+
+**Purpose**
+The conductor's live "awaiting payment" queue — every `ISSUED` ticket issued by this
+conductor, oldest first, so the app can show the current unpaid backlog.
+
+**Authentication Requirement**
+Bearer JWT, `ROLE_CONDUCTOR`.
+
+**Response** — `200 OK`
+```json
+{
+  "success": true,
+  "message": "Success",
+  "data": [
+    {
+      "ticketId": "<uuid>",
+      "passengerName": "S4 Test Rider",
+      "passengerQrToken": "a1b2c3d4e5f6...",
+      "originStop": "HSR Layout",
+      "destinationStop": "KR Puram Railway Station",
+      "totalFare": 90.00,
+      "status": "ISSUED",
+      "issuedAt": "2026-07-29T13:07:38.632477Z",
+      "minutesSinceIssue": 2
+    }
+  ]
+}
+```
+`minutesSinceIssue` is computed fresh on every call (`ChronoUnit.MINUTES.between(issuedAt,
+now)`), not stored — always reflects "right now," not the time of ticket creation.
+
+**Error Codes**
+| Status | Condition |
+|---|---|
+| 401 / 403 | No token / wrong role |
+
+---
+
+### PUT /tickets/{ticketId}/terminate
+
+**Purpose**
+Lets a conductor void a ticket they issued that never gets paid (e.g. the passenger
+gets off before paying) — removes it from the pending queue immediately, without
+waiting on the ticket-expiry scheduler (Sprint 7 scope, not built yet).
+
+**Authentication Requirement**
+Bearer JWT, `ROLE_CONDUCTOR`. Ownership is enforced implicitly by the lookup itself —
+scoped to `(ticketId, conductorId)` together, so a conductor can't terminate another
+conductor's ticket even with a guessed `ticketId`.
+
+**Request**
+No body. `ticketId` in the path.
+
+**Response** — `200 OK` — same shape as `POST /tickets/issue`'s response, with
+`status: "TERMINATED"`.
+
+**Error Codes**
+| Status | Condition |
+|---|---|
+| 400 | Ticket isn't currently `ISSUED` (already `PAID`/`TERMINATED`/`EXPIRED`) |
+| 404 | `ticketId` doesn't exist, or doesn't belong to this conductor |
+| 401 / 403 | No token / wrong role |
 
 ## Payments
 
-_No endpoints yet._
+### POST /payments/wallet
+
+**Purpose**
+Passenger pays for an `ISSUED` ticket out of their wallet balance, with overdraft
+support up to a configurable limit (`wallet.overdraft-limit`, default ₹100) — moves the
+ticket to `PAID` and records a `DEBIT` `Transaction`. Optimistic locking (`Wallet.
+version`) protects against a concurrent double-payment attempt on the same wallet.
+
+**Authentication Requirement**
+Bearer JWT, `ROLE_PASSENGER`.
+
+**Request**
+```json
+{ "ticketId": "<uuid>" }
+```
+Deliberately just `ticketId` — `userId` always comes from the authenticated principal
+(`@AuthenticationPrincipal`), never trusted from the request body, and `amount` is never
+client-supplied either; the service computes it from `ticket.totalFare`.
+
+**Validation Rules**
+- `ticketId` — required
+
+**Response** — `200 OK`
+```json
+{
+  "success": true,
+  "message": "Success",
+  "data": {
+    "ticketId": "<uuid>",
+    "amountDeducted": 90.00,
+    "walletBalanceAfter": 60.00,
+    "ticketStatus": "PAID",
+    "paidAt": "2026-07-30T09:12:04.511Z"
+  }
+}
+```
+
+**Error Codes**
+| Status | Condition |
+|---|---|
+| 400 | `@Valid` failure, OR ticket isn't `ISSUED` ("Ticket is not awaiting payment" — covers already-`PAID`/`TERMINATED`/`EXPIRED`), OR wallet isn't `ACTIVE`, OR `balance + overdraftLimit < totalFare` ("Insufficient balance. Available: ₹X, Required: ₹Y") |
+| 404 | `ticketId` doesn't exist, or doesn't belong to this passenger |
+| 409 | Concurrent update to the same wallet detected (optimistic lock failure) — generic "This record was updated by another request. Please retry." |
+| 401 / 403 | No token / wrong role |
+
+## Passengers
+
+Read-only endpoints for a passenger's own ticket history and wallet — every lookup is
+scoped to the authenticated principal's `userId`, never a path/query param, so one
+passenger can never read another's data by guessing an ID.
+
+### GET /passenger/tickets
+
+**Purpose**
+Full ticket history, newest first, enriched with conductor/bus/route names for display.
+
+**Authentication Requirement**
+Bearer JWT, `ROLE_PASSENGER`.
+
+**Response** — `200 OK`, array of:
+```json
+{
+  "ticketId": "<uuid>",
+  "conductorName": "Test Conductor",
+  "busNumber": "KA-01-F-1234",
+  "routeNumber": "500K",
+  "originStop": "HSR Layout",
+  "destinationStop": "KR Puram Railway Station",
+  "stagesCrossed": 6,
+  "adults": 2,
+  "children": 1,
+  "infants": 1,
+  "adultFare": 36.00,
+  "childFare": 18.00,
+  "totalFare": 90.00,
+  "status": "PAID",
+  "issuedAt": "2026-07-29T13:07:38.632477Z",
+  "paidAt": "2026-07-30T09:12:04.511Z"
+}
+```
+`paidAt` is `null` for a still-`ISSUED` ticket. `conductorName`/`busNumber`/
+`routeNumber` are 3 extra lookups per ticket (N+1) — accepted for now, same reasoning
+as `GET /admin/buses`, given the domain's real fleet/ridership scale.
+
+**Error Codes**
+| Status | Condition |
+|---|---|
+| 401 / 403 | No token / wrong role |
+
+---
+
+### GET /passenger/tickets/{ticketId}
+
+**Purpose** Single-ticket detail view — same shape as above.
+
+**Response** — `200 OK`, same object shape as `GET /passenger/tickets`'s array items.
+
+**Error Codes**
+| Status | Condition |
+|---|---|
+| 404 | `ticketId` doesn't exist, or doesn't belong to this passenger |
+| 401 / 403 | No token / wrong role |
+
+---
+
+### GET /passenger/wallet/balance
+
+**Purpose** Current wallet balance and status.
+
+**Response** — `200 OK`
+```json
+{
+  "success": true,
+  "message": "Success",
+  "data": { "balance": 60.00, "status": "ACTIVE", "lastUpdated": "2026-07-30T09:12:04.511Z" }
+}
+```
+
+**Error Codes**
+| Status | Condition |
+|---|---|
+| 401 / 403 | No token / wrong role |
+
+---
+
+### GET /passenger/wallet/transactions
+
+**Purpose** Wallet transaction ledger, newest first.
+
+**Response** — `200 OK`, array of:
+```json
+{
+  "transactionId": "<uuid>",
+  "amount": 90.00,
+  "type": "DEBIT",
+  "status": "SUCCESS",
+  "referenceId": "<ticketId>",
+  "createdAt": "2026-07-30T09:12:04.511Z"
+}
+```
+`referenceId` points to whatever caused the transaction — a `ticketId` for every
+`DEBIT` this sprint produces; a future wallet-recharge `CREDIT` (Sprint 5) would
+reference something else (e.g. a payment gateway transaction), which is why the field
+stays a generic UUID rather than being named `ticketId`.
+
+**Error Codes**
+| Status | Condition |
+|---|---|
+| 401 / 403 | No token / wrong role |
 
 ## QR Validation
 
