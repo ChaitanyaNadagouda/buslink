@@ -4,13 +4,19 @@
 Backend Foundation
 
 ## Active Sprint
-Sprint 4
+Sprint 5
 
 ## Sprint Status
-✅ Closed (2026-07-30) — `feature/ticket-wallet-payment` merged into `dev`, build clean. Pending merge into `main` (to be confirmed separately) and Sprint 5 planning.
+✅ Closed (2026-08-23). All Definition of Done items verified individually and
+checked — Razorpay gateway integration, `PaymentGatewayPort`/`RazorpayGatewayAdapter`
+abstraction, wallet recharge with overdraft recovery, UPI ticket payment, and all 23
+end-to-end verification steps (ngrok + Razorpay test mode) passing. One real bug
+found and fixed during live verification (webhook idempotency guard wrongly treated
+a `FAILED` payment attempt as terminal) — see `docs/sprints/Sprint-05.md`.
+`feature/payment-gateways` merged into `dev`, build clean.
 
 ## Active Sprint File
-docs/sprints/Sprint-04.md
+docs/sprints/Sprint-05.md
 
 ---
 

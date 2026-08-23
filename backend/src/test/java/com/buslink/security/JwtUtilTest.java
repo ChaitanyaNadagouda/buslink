@@ -64,8 +64,16 @@ class JwtUtilTest {
         User user = User.builder().email("rider@buslink.com").build();
         UserDetails userDetails = userDetailsFor("rider@buslink.com");
         String token = jwtUtil.generateAccessToken(user);
-        String tamperedToken = token.substring(0, token.length() - 1)
-                + (token.charAt(token.length() - 1) == 'a' ? 'b' : 'a');
+        // Tamper a character well inside the header segment rather than the token's
+        // last character. Base64url's final character in a segment can carry
+        // "don't-care" padding bits that some decoders ignore, so a small fraction of
+        // last-character swaps decode to byte-identical content and leave the
+        // signature valid — flaky, not a real security gap. A middle-of-segment
+        // character always changes the decoded bytes, so this is deterministic.
+        int tamperIndex = 5;
+        char originalChar = token.charAt(tamperIndex);
+        char tamperedChar = originalChar == 'a' ? 'b' : 'a';
+        String tamperedToken = token.substring(0, tamperIndex) + tamperedChar + token.substring(tamperIndex + 1);
 
         assertThat(jwtUtil.isTokenValid(tamperedToken, userDetails)).isFalse();
     }

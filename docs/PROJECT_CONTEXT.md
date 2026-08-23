@@ -8,16 +8,18 @@ BusLink
 
 ## Current Sprint
 
-Sprint 4
+Sprint 5
 
 ## Current Objective
 
-Sprint 4 is closed. Built the full ticket issuance and wallet payment flow end-to-end:
-`IdempotencyKey` entity/repository, `Ticket`/`TicketStatus` updates (`originStop` rename,
-`paidAt`, `TERMINATED`), `TicketService`/`WalletService` + impls, conductor-facing
-(`TicketController`) and passenger-facing (`PassengerController`, `PaymentController`)
-REST APIs, unit tests, and Postman verification (run in Postman Desktop by the user,
-guided step-by-step rather than driven by the assistant via curl).
+Sprint 5 is closed. Integrated Razorpay (test mode) via ngrok for real webhook
+delivery: `PaymentGatewayPort`/`RazorpayGatewayAdapter` (gateway abstraction, only
+class touching the Razorpay SDK directly), wallet recharge flow (`POST /payments/
+recharge/initiate` → webhook → credit wallet + overdraft recovery), UPI ticket
+payment flow (`POST /payments/ticket/upi/initiate` → webhook → ticket PAID),
+`WebhookController`/`WebhookServiceImpl` (signature-verified, public endpoint), unit
+tests, and full 23-step Postman + ngrok + Razorpay test-mode live verification (guided
+step-by-step in Postman Desktop, same pattern as Sprint 2/3/4).
 
 ## Completed
 
@@ -55,6 +57,11 @@ guided step-by-step rather than driven by the assistant via curl).
 - ✓ `TicketController`, `PassengerController`, `PaymentController` — 8 new REST endpoints, all role-gated via `SecurityConfig`
 - ✓ `TicketServiceImplTest` (8), `WalletServiceImplTest` (7) — all passing
 - ✓ Postman verification — `Ticket`/`Payment`/`Passenger` folders (15 new requests), all 20 verification steps passing, run in Postman Desktop against a live app + DB
+- ✓ Razorpay SDK, `RazorpayProperties`/`RazorpayConfig`, `PaymentGatewayPort`/`RazorpayGatewayAdapter` gateway abstraction (Sprint 5)
+- ✓ `PaymentService`/`WebhookService` + impls — wallet recharge (with overdraft recovery) and UPI ticket payment, both confirmed via real signed webhooks through ngrok
+- ✓ `WebhookController` — public `POST /webhooks/razorpay`, signature-verified inside the handler, not by Spring Security
+- ✓ `RazorpayGatewayAdapterTest` (8), `PaymentServiceImplTest` (6), `WebhookServiceImplTest` (7) — all passing
+- ✓ 23-step Postman + ngrok + Razorpay test-mode live verification — all steps passing, including a real bug found and fixed mid-verification (webhook idempotency guard wrongly treated a `FAILED` payment attempt as terminal, dropping a later real success — see `docs/sprints/Sprint-05.md`)
 
 ## Current Architecture
 
@@ -74,13 +81,33 @@ Docker Compose.
 
 ## Next Planned Milestone
 
-Sprint 5 — not yet planned. Likely scope: UPI/card payment gateway integration, wallet
-recharge (no recharge endpoint exists yet — Sprint 4's Postman verification had to top
-up wallets via direct `psql` updates), overdraft recovery on recharge, and possibly real
-admin authentication (no `ROLE_ADMIN` login path exists yet — see Notes below). Redis
-caching remains Sprint 6, ticket-expiry scheduler Sprint 7, Flyway remains deferred.
-Sprint plan to be drafted in Notion, then `docs/sprints/Sprint-05.md` generated once
-approved.
+Sprint 6 — not yet planned. Likely scope per `ARCHITECTURE.md`'s roadmap: admin
+authentication, admin CRUD, analytics, Redis caching (all explicitly deferred from
+Sprint 5). Awaiting the next sprint plan from Notion.
+
+**Sprint 5 — closed (2026-08-23).** All Definition of Done items verified
+individually and checked: Razorpay SDK/config/gateway abstraction in place,
+`PaymentGatewayPort`/`RazorpayGatewayAdapter` verified via 8 passing
+`RazorpayGatewayAdapterTest` tests, recharge/UPI-ticket-payment initiation
+endpoints returning correct Razorpay order details, both flows confirmed via real
+signed webhook delivery through ngrok (overdraft recovery: -₹40 → ₹160 exactly, 1
+DEBIT + 1 CREDIT), invalid-signature and duplicate-webhook security checks both
+passing, all 6 `PaymentServiceImplTest` and 7 `WebhookServiceImplTest` tests
+passing, all 23 end-to-end verification steps passing. One real bug found and
+fixed during S5-21's live verification: Razorpay sends one webhook per payment
+*attempt*, not per order, so an earlier declined attempt's `payment.failed`
+webhook permanently stuck a `Payment` row at `FAILED`, silently dropping the
+later successful attempt's `payment.captured` webhook — fixed by only treating
+`SUCCESS` as a terminal status in the idempotency guard, with a dedicated
+regression test added. Two checkout-account quirks hit during verification
+(external to the codebase, not bugs): UPI unavailable at checkout on this test
+account, and the generic international test Visa card rejected — worked around
+using Razorpay's domestic test Mastercard instead. One gap found during plan
+review, before implementation began (`Transaction.referenceId` is `NOT NULL`, but
+the plan's overdraft-recovery step needed a `referenceId(null)` `Transaction`) —
+resolved by reusing `payment.getPaymentId()` for both the recovery DEBIT and
+recharge CREDIT; see `Sprint-05.md`'s gap-review section for the full reasoning.
+`feature/payment-gateways` merged into `dev`, build clean.
 
 **Sprint 4 — closed (2026-07-30).** 12 of 16 Definition of Done items verified
 individually and checked; 4 left honestly unchecked rather than rubber-stamped:
@@ -143,3 +170,5 @@ with the rest of the auth flow as one coherent unit rather than a stub built twi
 - Sprint 3: all doc-closure updates (this entry included) were committed on `feature/route-fare-conductor-auth` *before* merging into `dev` — a deliberate change from Sprint 1/2's pattern (where the closure commit landed on `dev` right after merging, so it could cite the merge commit's hash). This means the merge commit hash isn't recorded here; `git log` on `dev` is authoritative for that.
 - `/admin/**` has no live authentication path as of Sprint 3 close — `AdminRouteController`/`AdminBusController` are fully implemented and correctly reject unauthenticated requests (`401`), but nothing can mint a `ROLE_ADMIN` JWT yet (no `Admin` entity/principal/login endpoint). Route 500K and all Sprint 3 seed data were created by `DataSeeder` bypassing the HTTP layer entirely, not through the admin API. Real admin auth is deferred, likely Sprint 4+ — same recipe as conductor auth (separate `UserDetailsService`, JWT role claim), not designed in detail yet.
 - No wallet-recharge endpoint exists as of Sprint 4 close — `POST /payments/wallet` can only *debit* an existing balance. Sprint 4's own Postman verification had to top up test wallets via direct `psql UPDATE` statements (₹150, then ₹20, then -₹80 for the overdraft tests) since there's no HTTP path to do it. Wallet recharge (and overdraft recovery on recharge) is explicit Sprint 5 scope.
+- **Resolved in Sprint 5:** `POST /payments/recharge/initiate` now lets a passenger top up their wallet via Razorpay, with overdraft auto-recovered on recharge. `psql`-driven balance manipulation is still used to *simulate* a pre-existing overdraft state for testing (Sprint 5's own S5-21 Step 9), since there's no legitimate way to overdraw a wallet outside of real ticket payments — that part of the pattern is inherent to test setup, not a gap.
+- `/admin/**` still has no live authentication path as of Sprint 5 close (same gap noted at Sprint 3/4 close) — real admin auth remains Sprint 6 scope per `ARCHITECTURE.md`.
