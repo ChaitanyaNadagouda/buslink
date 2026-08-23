@@ -435,3 +435,104 @@ Completed
   full breakdown (2 need an actual pgAdmin UI look rather than just `psql`,
   2 ordering claims were never exercised against 2+ simultaneous entries in
   this sprint's own testing).
+
+---
+
+# Sprint 5
+
+## Razorpay Integration, Gateway Abstraction, Payment/Webhook Flows (2026-08-03 to 2026-08-10)
+
+Completed
+
+- S5-01 to S5-05: Razorpay Java SDK dependency, `RazorpayProperties`
+  (`@ConfigurationProperties`, same pattern as `WalletProperties`/
+  `TicketProperties`), `RazorpayConfig` exposing the `RazorpayClient` bean.
+- **Mid-sprint design decision (2026-08-04):** before building
+  `PaymentServiceImpl`/`WebhookServiceImpl` directly against the Razorpay
+  SDK, raised and decided to abstract the integration behind a
+  `PaymentGatewayPort` interface + `RazorpayGatewayAdapter` implementation
+  (new `gateway`/`gateway/impl` packages) — so business logic depends only
+  on a domain-shaped contract (`createOrder`, `verifyWebhookSignature`,
+  `parseWebhookEvent`, `getPublicKeyId`), never on `RazorpayClient` or
+  Razorpay's raw JSON shape directly. `RazorpayGatewayAdapter` is the only
+  class in the codebase referencing `com.razorpay.*`. Found along the way:
+  `OrderClient.create`/`Utils.verifyWebhookSignature` both throw checked
+  `RazorpayException`, which the port's unchecked-only contract can't leak —
+  `createOrder` rethrows as a new `PaymentGatewayException` (502 Bad
+  Gateway, via `GlobalExceptionHandler`), `verifyWebhookSignature` fails
+  closed (returns `false`) rather than propagating. Full rationale in
+  `Sprint-05.md`'s "Mid-sprint design decision" section.
+- S5-09 to S5-18: `SecurityConfig` rules for the 3 new endpoints (`/webhooks/
+  razorpay` deliberately `permitAll()` — security is the gateway port's
+  signature check, not Spring Security, since Razorpay itself has no JWT);
+  request/response DTOs; `PaymentService`/`PaymentServiceImpl`
+  (`initiateRecharge`, `initiateTicketUpiPayment`); `WebhookService`/
+  `WebhookServiceImpl` (signature verify → parse → dispatch by purpose →
+  overdraft recovery / ticket PAID); `PaymentRepository.
+  findByGatewayReferenceId`; `PaymentController` additions + new
+  `WebhookController`.
+  **Deviation found (2026-08-09):** the plan's `initiateTicketUpiPayment`
+  pending-payment check used `findByReferenceId` (single-result), but
+  `Payment.referenceId` has no uniqueness constraint — a ticket with an
+  earlier `FAILED` retry plus a new `PENDING` row would throw
+  `IncorrectResultSizeDataAccessException`. Scoped the query to
+  `findByReferenceIdAndStatus(ticketId, PENDING)` instead, since at most one
+  `PENDING` row can exist per ticket by construction.
+  **Bug found and fixed (2026-08-10), live-verified:** a missing
+  `X-Razorpay-Signature` header returned `500` instead of `400` —
+  `GlobalExceptionHandler`'s catch-all was intercepting Spring's own
+  `MissingRequestHeaderException` before any specific handler could claim
+  it (same class of gap as Sprint 2's 403-instead-of-401 bug). Fixed with a
+  dedicated `@ExceptionHandler(MissingRequestHeaderException.class)` → 400.
+  Also fixed an unrelated pre-existing `JwtUtilTest` flake (flagged but not
+  root-caused in Sprint 4) — traced to base64url's don't-care padding bits
+  in a token's *last* character occasionally surviving a single-char tamper
+  unchanged; fixed by tampering a mid-segment character instead.
+- S5-19/S5-20: `PaymentServiceImplTest` (6 tests) and `WebhookServiceImplTest`
+  (originally 6, 7 after the S5-21 bug fix below) — all mocking
+  `PaymentGatewayPort` directly rather than the Razorpay SDK or a computed
+  HMAC signature.
+
+## End-to-End Verification & Sprint Closure (2026-08-23)
+
+Completed
+
+- S5-21: full 23-step live verification via ngrok + Razorpay test mode,
+  guided step-by-step in Postman Desktop (same established pattern as
+  Sprint 2/3/4 closures). No frontend exists yet, so a throwaway standalone
+  HTML page (outside the repo, in scratch space) embedded Razorpay's
+  `checkout.js` to actually open the payment widget against each order.
+  **Checkout-account quirks hit (external to the codebase):** the test
+  account had UPI unavailable at checkout (likely pending Razorpay
+  account activation/KYC, even in test mode) and rejected the generic
+  international test Visa card — worked around by using Razorpay's
+  domestic test Mastercard instead; `WebhookServiceImpl` is payment-method-
+  agnostic (reacts only to the webhook event + order ID), so this didn't
+  weaken any part of the actual verification.
+  **Real bug found and fixed:** the overdraft-recovery recharge failed
+  silently on its first live run — Razorpay allows multiple payment
+  *attempts* per *order* (a declined card, then a retry), sending one
+  webhook per attempt. An earlier attempt's `payment.failed` webhook had
+  already flipped our order-keyed `Payment` row to `FAILED` before the
+  later successful attempt's `payment.captured` webhook arrived; the
+  idempotency guard (`status != PENDING` → skip) wrongly treated `FAILED`
+  as terminal and silently dropped the real success. Fixed by only
+  treating `SUCCESS` as terminal (`status == SUCCESS` → skip); added
+  `handleWebhook_recharge_success_afterPriorFailedAttempt` as a dedicated
+  regression test. Full root-cause writeup in `Sprint-05.md`. Re-ran the
+  overdraft flow live after the fix and confirmed correct: -₹40 → ₹160,
+  1 DEBIT (₹40) + 1 CREDIT (₹200).
+  All 23 steps ultimately passed: no-overdraft recharge (₹0→₹200),
+  overdraft-recovery recharge (-₹40→₹160), UPI ticket payment (ISSUED→PAID,
+  wallet untouched, no Transaction row), invalid signature → 400, duplicate
+  webhook (replayed via ngrok's inspector) → 200 with no reprocessing
+  (`payment.updated_at`/`ticket.paid_at` confirmed unchanged via `psql`).
+- S5-22: doc updates (this entry, `PROJECT_CONTEXT.md`, `ARCHITECTURE.md`,
+  `API.md`, `INTERVIEW_PREP.md`, `Sprint-05.md`'s own checkboxes) plus the
+  webhook idempotency fix and its regression test, committed on
+  `feature/payment-gateways` before merging into `dev`, matching Sprint
+  3/4's closure-commit-before-merge pattern.
+- **Sprint 5 declared complete (2026-08-23).** All Definition of Done items
+  verified individually and checked, including the two flows requiring a
+  live Razorpay test-mode payment through ngrok. `feature/payment-gateways`
+  merged into `dev`, build clean.

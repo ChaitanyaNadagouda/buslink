@@ -10,6 +10,10 @@ domain, and role-based access (`ROLE_PASSENGER`/`ROLE_CONDUCTOR`/`ROLE_ADMIN`). 
 added the ticket issuance and wallet payment flow: conductor-side issuance (with
 idempotency) and termination, passenger-side wallet payment (with overdraft support and
 optimistic-lock-protected deduction), and passenger-facing ticket/wallet read endpoints.
+Sprint 5 added real Razorpay (test mode) payment gateway integration: wallet recharge
+and UPI ticket payment initiation endpoints, plus the public, signature-verified
+`POST /webhooks/razorpay` that's the actual trust boundary confirming money movement —
+see `ARCHITECTURE.md` for the `PaymentGatewayPort` abstraction behind it.
 All follow the `ApiResponse<T>` envelope (`{success, message, data}`) on both success and
 error paths. See `postman/BusLink-API.postman_collection.json` for a runnable collection.
 
@@ -755,6 +759,233 @@ client-supplied either; the service computes it from `ticket.totalFare`.
 | 404 | `ticketId` doesn't exist, or doesn't belong to this passenger |
 | 409 | Concurrent update to the same wallet detected (optimistic lock failure) — generic "This record was updated by another request. Please retry." |
 | 401 / 403 | No token / wrong role |
+
+---
+
+### POST /payments/recharge/initiate
+
+**Purpose**
+Starts a wallet top-up via Razorpay. Creates a Razorpay order (through
+`PaymentGatewayPort`, never the Razorpay SDK directly — see
+`ARCHITECTURE.md`) and a `PENDING` `Payment` row; the wallet is **not**
+credited yet — that only happens once the signed webhook confirms success
+(see `POST /webhooks/razorpay` below).
+
+**Authentication Requirement**
+Bearer JWT, `ROLE_PASSENGER`.
+
+**Request**
+```json
+{ "amount": 200.00 }
+```
+
+**Validation Rules**
+- `amount` — required, minimum `1.00`
+
+**Response** — `200 OK`
+```json
+{
+  "success": true,
+  "message": "Success",
+  "data": {
+    "paymentId": "<uuid>",
+    "razorpayOrderId": "order_TTFKZlrngVi0oz",
+    "amount": 200.00,
+    "currency": "INR",
+    "razorpayKeyId": "rzp_test_..."
+  }
+}
+```
+`razorpayKeyId` is handed to the frontend to open Razorpay's checkout
+widget — deliberately Razorpay-named in the response, since the checkout
+integration itself is inherently tied to whichever gateway's widget is in
+use (see `Sprint-05.md`'s "Mid-sprint design decision" for the scope line
+between backend and frontend abstraction).
+
+**Error Codes**
+| Status | Condition |
+|---|---|
+| 400 | `@Valid` failure, OR wallet isn't `ACTIVE` |
+| 404 | Wallet doesn't exist for this passenger |
+| 401 / 403 | No token / wrong role |
+| 502 | Razorpay order creation failed (`PaymentGatewayException`) |
+
+---
+
+### POST /payments/ticket/upi/initiate
+
+**Purpose**
+Starts a direct UPI/card payment for an `ISSUED` ticket via Razorpay — an
+alternative to `POST /payments/wallet` that never touches the wallet.
+Idempotent: a second call for the same ticket while a payment is still
+`PENDING` returns the existing order instead of creating a duplicate.
+
+**Authentication Requirement**
+Bearer JWT, `ROLE_PASSENGER`.
+
+**Request**
+```json
+{ "ticketId": "<uuid>" }
+```
+
+**Validation Rules**
+- `ticketId` — required
+
+**Response** — `200 OK`
+```json
+{
+  "success": true,
+  "message": "Success",
+  "data": {
+    "paymentId": "<uuid>",
+    "razorpayOrderId": "order_TTIDlM4IE2ameS",
+    "amount": 90.00,
+    "currency": "INR",
+    "razorpayKeyId": "rzp_test_...",
+    "ticketId": "<uuid>"
+  }
+}
+```
+`amount` is always `ticket.totalFare` — never client-supplied.
+
+**Error Codes**
+| Status | Condition |
+|---|---|
+| 400 | Ticket isn't `ISSUED` ("Ticket is not awaiting payment") |
+| 404 | `ticketId` doesn't exist, or doesn't belong to this passenger |
+| 401 / 403 | No token / wrong role |
+| 502 | Razorpay order creation failed (`PaymentGatewayException`) |
+
+## Webhooks
+
+### POST /webhooks/razorpay
+
+**Purpose**
+The actual trust boundary for every payment in this system — Razorpay
+calls this once a checkout attempt succeeds or fails. Verifies the
+request's HMAC signature, then credits the wallet (with overdraft
+recovery) or marks the ticket `PAID`, depending on `Payment.purpose`.
+Idempotent: a `Payment` already `SUCCESS` is never reprocessed, so
+Razorpay's own webhook retries are safe.
+
+**Authentication Requirement**
+None — `permitAll()` in `SecurityConfig`, since Razorpay itself carries no
+JWT. Security is enforced entirely by the signature check inside the
+handler (`PaymentGatewayPort.verifyWebhookSignature`), not by Spring
+Security.
+
+**Request**
+Header: `X-Razorpay-Signature` — **required**, the HMAC signature Razorpay
+computes over the raw request body.
+Body: Razorpay's raw webhook JSON, read as a plain `String` (not a typed
+DTO) — the raw bytes are needed for signature verification before any
+parsing happens.
+
+**Sample raw webhook payload — `payment.captured`** (success; only the
+fields `RazorpayGatewayAdapter.parseWebhookEvent` actually reads are
+`event` and `payload.payment.entity.order_id` — everything else is real
+Razorpay shape, shown for reference since capturing the full body is what
+you'd actually see live in ngrok's inspector):
+```json
+{
+  "entity": "event",
+  "account_id": "acc_TL8csexample",
+  "event": "payment.captured",
+  "contains": ["payment"],
+  "payload": {
+    "payment": {
+      "entity": {
+        "id": "pay_TTFxamp1e0001",
+        "entity": "payment",
+        "amount": 20000,
+        "currency": "INR",
+        "status": "captured",
+        "order_id": "order_TTFKZlrngVi0oz",
+        "invoice_id": null,
+        "international": false,
+        "method": "card",
+        "amount_refunded": 0,
+        "refund_status": null,
+        "captured": true,
+        "description": null,
+        "card_id": "card_TTFxamp1eCard",
+        "bank": null,
+        "wallet": null,
+        "vpa": null,
+        "email": "rider1@example.com",
+        "contact": "+919999999999",
+        "notes": [],
+        "fee": 472,
+        "tax": 72,
+        "error_code": null,
+        "error_description": null,
+        "created_at": 1755962764
+      }
+    }
+  },
+  "created_at": 1755962764
+}
+```
+
+**Sample raw webhook payload — `payment.failed`** (declined attempt —
+note `error_code`/`error_description` populated, `order_id` unchanged
+since it's still the same order):
+```json
+{
+  "entity": "event",
+  "account_id": "acc_TL8csexample",
+  "event": "payment.failed",
+  "contains": ["payment"],
+  "payload": {
+    "payment": {
+      "entity": {
+        "id": "pay_TTFxamp1e0000",
+        "entity": "payment",
+        "amount": 20000,
+        "currency": "INR",
+        "status": "failed",
+        "order_id": "order_TTFxkjYGGcyqgA",
+        "international": true,
+        "method": "card",
+        "amount_refunded": 0,
+        "refund_status": null,
+        "captured": false,
+        "card_id": "card_TTFxamp1eCard2",
+        "bank": null,
+        "wallet": null,
+        "vpa": null,
+        "email": "rider1@example.com",
+        "contact": "+919999999999",
+        "notes": [],
+        "error_code": "BAD_REQUEST_ERROR",
+        "error_description": "International cards are not supported",
+        "error_source": "customer",
+        "error_step": "payment_authentication",
+        "error_reason": "international_transaction_not_allowed",
+        "created_at": 1755964391
+      }
+    }
+  },
+  "created_at": 1755964391
+}
+```
+
+**Response** — `200 OK`, body `"OK"` (plain string, not `ApiResponse`) —
+Razorpay expects any `200` response to stop retrying; a non-200 triggers
+more retries.
+
+**Error Codes**
+| Status | Condition |
+|---|---|
+| 400 | Missing `X-Razorpay-Signature` header, OR signature verification fails ("Invalid webhook signature") |
+| 404 | No `Payment` found matching the webhook's order ID |
+
+**Important behavioral note:** Razorpay sends one webhook **per payment
+attempt**, not one per order — a declined attempt followed by a retry on
+the same order produces 2 webhooks. Only `PaymentStatus.SUCCESS` is
+treated as terminal; a `FAILED` attempt does not block a later `SUCCESS`
+webhook for the same order from being processed. See `Sprint-05.md`/
+`DEVELOPMENT_LOG.md` for the live-verification bug this fixed.
 
 ## Passengers
 

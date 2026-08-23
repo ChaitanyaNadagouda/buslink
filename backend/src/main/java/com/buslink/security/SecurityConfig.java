@@ -32,6 +32,8 @@ public class SecurityConfig {
                         .permitAll()
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**")
                         .permitAll()
+                        .requestMatchers(HttpMethod.POST, "/webhooks/razorpay")
+                        .permitAll()
                         .requestMatchers("/admin/**")
                         .hasRole("ADMIN")
                         .requestMatchers("/routes/*/stops", "/routes/*/fare")
@@ -42,7 +44,11 @@ public class SecurityConfig {
                         .hasRole("CONDUCTOR")
                         .requestMatchers(HttpMethod.PUT, "/tickets/*/terminate")
                         .hasRole("CONDUCTOR")
-                        .requestMatchers(HttpMethod.POST, "/payments/wallet")
+                        .requestMatchers(
+                                HttpMethod.POST,
+                                "/payments/wallet",
+                                "/payments/recharge/initiate",
+                                "/payments/ticket/upi/initiate")
                         .hasRole("PASSENGER")
                         .requestMatchers(HttpMethod.GET, "/passenger/**")
                         .hasRole("PASSENGER")
