@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "c56b0cb3-6605-4eb7-aadf-b7616de42023",
     "name": "BusLink API",
-    "description": "Sprint 2 \u2014 passenger auth (register/login/refresh) and profile/QR endpoints. Sprint 3 \u2014 conductor auth, route/stop/fare APIs. Import into Postman Desktop. Run Auth > Login at least once to populate {{accessToken}} before hitting User; run Conductor Auth > Login at least once to populate {{conductorAccessToken}} and {{routeId}} before hitting Route/Fare. Sprint 4 \u2014 ticket issuance and wallet payment APIs. Run Conductor Auth > Login and User > QR Token at least once to populate {{routeId}}, {{busId}}, and {{qrToken}} before hitting Ticket/Payment.",
+    "description": "Sprint 2 \u2014 passenger auth (register/login/refresh) and profile/QR endpoints. Sprint 3 \u2014 conductor auth, route/stop/fare APIs. Import into Postman Desktop. Run Auth > Login at least once to populate {{accessToken}} before hitting User; run Conductor Auth > Login at least once to populate {{conductorAccessToken}} and {{routeId}} before hitting Route/Fare. Sprint 4 \u2014 ticket issuance and wallet payment APIs. Run Conductor Auth > Login and User > QR Token at least once to populate {{routeId}}, {{busId}}, and {{qrToken}} before hitting Ticket/Payment. Sprint 5 \u2014 Razorpay wallet recharge and UPI ticket payment initiation (Payment > Initiate Recharge / Initiate Ticket UPI Payment). These only start the payment \u2014 completing checkout and confirming the resulting webhook happens outside Postman (browser checkout + ngrok); see docs/sprints/Sprint-05.md's S5-21 for the full guided flow.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -73,6 +73,46 @@
     },
     {
       "key": "overdraftRejectIdempotencyKey",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "rechargeOrderId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "rechargeKeyId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "rechargePaymentId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "upiTicketId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "upiIdempotencyKey",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "upiOrderId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "upiKeyId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "upiPaymentId",
       "value": "",
       "type": "string"
     }
@@ -1050,6 +1090,71 @@
               }
             }
           ]
+        },
+        {
+          "id": "81461eef-5430-4ec2-81fb-2b959eb1b0b2",
+          "name": "Issue Ticket (For UPI Payment)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{conductorAccessToken}}"
+              },
+              {
+                "key": "X-Idempotency-Key",
+                "value": "{{upiIdempotencyKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tickets/issue",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tickets",
+                "issue"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"qrToken\": \"{{qrToken}}\",\n  \"busId\": \"{{busId}}\",\n  \"routeId\": \"{{routeId}}\",\n  \"originStop\": \"HSR Layout\",\n  \"destinationStop\": \"KR Puram Railway Station\",\n  \"adults\": 2,\n  \"children\": 1,\n  \"infants\": 1\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('upiIdempotencyKey', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.success && body.data && body.data.ticketId) {",
+                  "    pm.collectionVariables.set('upiTicketId', body.data.ticketId);",
+                  "}",
+                  "",
+                  "pm.test('UPI-payment-test ticket issued (200, ISSUED, totalFare=90)', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(body.data.status).to.eql('ISSUED');",
+                  "    pm.expect(parseFloat(body.data.totalFare)).to.eql(90);",
+                  "});"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
@@ -1248,6 +1353,127 @@
               }
             }
           ]
+        },
+        {
+          "id": "c9f71745-3bcc-4404-9a41-66b37eaaae23",
+          "name": "Initiate Recharge",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payments/recharge/initiate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "recharge",
+                "initiate"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 200\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.success && body.data) {",
+                  "    pm.collectionVariables.set('rechargeOrderId', body.data.razorpayOrderId);",
+                  "    pm.collectionVariables.set('rechargeKeyId', body.data.razorpayKeyId);",
+                  "    pm.collectionVariables.set('rechargePaymentId', body.data.paymentId);",
+                  "}",
+                  "",
+                  "pm.test('Recharge initiated (200, amount=200, INR)', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(parseFloat(body.data.amount)).to.eql(200);",
+                  "    pm.expect(body.data.currency).to.eql('INR');",
+                  "});",
+                  "",
+                  "pm.test('Razorpay orderId and keyId returned', function () {",
+                  "    pm.expect(body.data.razorpayOrderId).to.not.be.empty;",
+                  "    pm.expect(body.data.razorpayKeyId).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "dbf11d09-958e-42c4-b3a8-555b26dc5e2d",
+          "name": "Initiate Ticket UPI Payment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payments/ticket/upi/initiate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "ticket",
+                "upi",
+                "initiate"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ticketId\": \"{{upiTicketId}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.success && body.data) {",
+                  "    pm.collectionVariables.set('upiOrderId', body.data.razorpayOrderId);",
+                  "    pm.collectionVariables.set('upiKeyId', body.data.razorpayKeyId);",
+                  "    pm.collectionVariables.set('upiPaymentId', body.data.paymentId);",
+                  "}",
+                  "",
+                  "pm.test('UPI payment initiated (200, ticketId matches, amount=90)', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(body.data.ticketId).to.eql(pm.collectionVariables.get('upiTicketId'));",
+                  "    pm.expect(parseFloat(body.data.amount)).to.eql(90);",
+                  "});",
+                  "",
+                  "pm.test('Razorpay orderId and keyId returned', function () {",
+                  "    pm.expect(body.data.razorpayOrderId).to.not.be.empty;",
+                  "    pm.expect(body.data.razorpayKeyId).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
@@ -1414,6 +1640,51 @@
                   "pm.test('Transaction history returned 200 as an array', function () {",
                   "    pm.response.to.have.status(200);",
                   "    pm.expect(body.data).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "887891ca-f140-4d5d-8b13-57c8a948c923",
+          "name": "Get Ticket By Id (UPI Payment)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/passenger/tickets/{{upiTicketId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "passenger",
+                "tickets",
+                "{{upiTicketId}}"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Ticket detail returned 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Ticket is PAID with a non-null paidAt (via UPI, no wallet deduction)', function () {",
+                  "    pm.expect(body.data.status).to.eql('PAID');",
+                  "    pm.expect(body.data.paidAt).to.not.be.null;",
                   "});"
                 ]
               }

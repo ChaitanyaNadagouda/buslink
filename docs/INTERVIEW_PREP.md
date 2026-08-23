@@ -646,3 +646,144 @@ which needed the separate `mockito-inline` artifact to mock final classes/method
 Since Mockito 5.0, the inline mock maker is the *default* — no extra dependency, no
 extra setup, `@Mock` on a `record` just works. Worth knowing as a version-specific fact,
 not a general Mockito truth — an older project on Mockito 3/4 would need the extra step.
+
+---
+
+## Sprint 5
+
+### Ports & Adapters (Gateway Abstraction)
+
+**Q: Why put a `PaymentGatewayPort` interface in front of the Razorpay SDK instead of calling `RazorpayClient` directly from `PaymentServiceImpl`?**
+A: Without it, business logic (create an order, confirm a payment) would be
+entangled with *how Razorpay specifically* does those things — its SDK types,
+its raw webhook JSON shape, its checked exceptions. `PaymentGatewayPort`
+exposes only what the domain actually needs (`createOrder`,
+`verifyWebhookSignature`, `parseWebhookEvent`, `getPublicKeyId`), and
+`RazorpayGatewayAdapter` is the *only* class in the codebase importing
+`com.razorpay.*`. This is Ports & Adapters (Hexagonal Architecture) applied
+narrowly at one boundary — not a full rewrite of the app's layering, just
+the one seam that's genuinely vendor-coupled today and could plausibly need
+a second gateway later.
+
+**Q: `parseWebhookEvent` returns a `GatewayWebhookEvent` record with just `type` and `gatewayOrderId` — why not hand back Razorpay's full parsed JSON?**
+A: That's the actual point of a port: the adapter absorbs the vendor's
+shape, the port exposes a minimal *projection* of only the facts business
+logic needs — did it succeed, and which order. A generic "mirror of
+Razorpay's JSON" would just relocate the coupling one layer up instead of
+removing it; the next thing to touch that JSON would still need to know
+Razorpay's field names.
+
+**Q: The port's methods declare no checked exceptions, but the underlying Razorpay SDK calls (`OrderClient.create`, `Utils.verifyWebhookSignature`) both throw a checked `RazorpayException`. How does the adapter reconcile that?**
+A: Differently per method, based on what "the safe default" means for each:
+- `createOrder` — catches `RazorpayException`, rethrows as a new unchecked
+  `PaymentGatewayException`, mapped to `502 Bad Gateway`. An order-creation
+  failure is a real upstream problem the caller needs to know about.
+- `verifyWebhookSignature` — catches `RazorpayException` and returns
+  `false` (fail-closed) rather than propagating. If signature verification
+  can't even run, the safe default is "treat as invalid" — an exception
+  here must never accidentally let a webhook bypass the security check.
+
+### Webhooks as a Trust Boundary
+
+**Q: Why is `POST /webhooks/razorpay` `permitAll()` in `SecurityConfig` — doesn't that mean anyone can hit it?**
+A: Anyone *can* hit it, but Spring Security JWT auth was never the right
+tool here — Razorpay's own servers call this endpoint, and Razorpay has no
+JWT to send. The actual security check is inside the handler: the raw
+request body's HMAC signature (`X-Razorpay-Signature`) is verified against
+a shared webhook secret only Razorpay and this backend know. An invalid or
+missing signature is rejected (`400`) before any business logic runs. The
+trust boundary moved from "which role does this caller have" (Spring
+Security's usual job) to "can this caller prove it's Razorpay" (a
+domain-specific check), which is why it lives in the gateway port, not the
+filter chain.
+
+**Q: Why does the webhook body arrive as a raw `String`, not a typed request DTO?**
+A: HMAC signature verification is computed over the *exact raw bytes*
+Razorpay sent. Deserializing into a DTO first (even to re-serialize it
+later) risks the JSON not round-tripping byte-for-byte — different key
+ordering, whitespace, or number formatting would produce a different
+signature and cause every legitimate webhook to fail verification. The raw
+`String` is verified first; only after that succeeds does the adapter parse
+it into the minimal `GatewayWebhookEvent` projection.
+
+### Idempotency at the Attempt Level, Not Just the Request Level
+
+**Q: The idempotency guard originally read `if (payment.getStatus() != PENDING) return;` — plausible-looking, but it caused a real bug during live verification. What went wrong?**
+A: Razorpay allows multiple payment *attempts* against one *order* (a
+declined card, then a retry with another card) and sends a separate webhook
+per attempt, not one per order. The first attempt's `payment.failed`
+webhook flipped the order-keyed `Payment` row to `FAILED` — a state the
+guard treated as "already processed, don't touch it again." When the
+second attempt's real `payment.captured` webhook arrived later for the
+*same order*, the guard silently dropped it, and the wallet was never
+credited even though Razorpay's own dashboard showed the order `paid`.
+```
+ Attempt 1 (declined)         Attempt 2 (succeeds)
+        │                            │
+        ▼                            ▼
+ payment.failed webhook       payment.captured webhook
+        │                            │
+        ▼                            ▼
+ Payment.status = FAILED      guard: status != PENDING?
+        │                       → true (it's FAILED) → SKIPPED
+        └── wrongly treated as terminal ───────────────┘
+                                                    ✗ wallet never credited
+```
+**Q: What's the actual fix, and why does it still preserve the original duplicate-webhook protection?**
+A: Change the guard to only treat `SUCCESS` as terminal:
+`if (payment.getStatus() == PaymentStatus.SUCCESS) return;`. A `FAILED`
+attempt no longer blocks a later real success on the same order — but a
+genuine duplicate of a `payment.captured` webhook (Razorpay's own retry
+behavior) is still caught, since the first successful processing already
+set `status = SUCCESS`. The fix narrows *what counts as done*, without
+weakening *what counts as a duplicate*.
+
+**Q: General lesson — what does this bug say about designing idempotency for any payment gateway integration, not just Razorpay?**
+A: Identify the gateway's actual retry unit before choosing what your
+idempotency key represents. Here, the natural assumption ("one payment
+event per order") was wrong — the gateway's retry unit is the *attempt*,
+and only one specific attempt outcome (success) is truly final for the
+order. A guard written against "the first non-pending state wins" silently
+encodes the wrong assumption; the fix was to encode the *actual* terminal
+condition (`SUCCESS`) rather than an approximation of it ("not still
+pending").
+
+### Money Movement & Ledger Design
+
+**Q: Walk through what actually happens, in order, when a recharge webhook confirms overdraft recovery.**
+A:
+```
+ wallet.balance = -40.00, payment.amount = 200.00
+              │
+              ▼
+ balance < 0?  yes
+              │
+              ▼
+ Transaction(DEBIT, 40.00, referenceId=payment.paymentId)   ← acknowledges the
+              │                                                 existing debt
+              ▼
+ wallet.balance = -40.00 + 200.00 = 160.00
+              │
+              ▼
+ Transaction(CREDIT, 200.00, referenceId=payment.paymentId) ← the recharge itself
+              │
+              ▼
+ payment.status = SUCCESS
+```
+Two `Transaction` rows, not one — the ledger records "the debt was repaid"
+and "new money arrived" as separate, individually-auditable events, even
+though only one `wallet.save()` actually happens.
+
+**Q: `Transaction.referenceId` is `NOT NULL`, but the overdraft-recovery `DEBIT` doesn't correspond to any single ticket or event the way every other `Transaction` in the system does. What's actually stored there, and why?**
+A: Both the recovery `DEBIT` and the recharge `CREDIT` reuse
+`payment.getPaymentId()`. This reframes what `referenceId` means slightly —
+not strictly "the ticket/entity this money is about" (its meaning
+everywhere else, e.g. a ticket ID for a wallet-payment `DEBIT`), but "the
+event that caused this ledger entry to be written." For overdraft recovery,
+that's genuinely the same recharge `Payment` for both rows, so no schema
+change (making the column nullable) or sentinel-value hack was needed —
+just a slightly broader, still-truthful reading of the same column.
+Alternatives considered and rejected: a nullable column (Sprint 4's
+`ddl-auto=update`-can't-alter-constraints problem would apply identically
+here), or a sentinel/marker UUID (a footgun for anyone querying the table
+later without knowing the convention).
