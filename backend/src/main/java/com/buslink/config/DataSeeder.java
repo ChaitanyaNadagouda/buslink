@@ -1,11 +1,14 @@
 package com.buslink.config;
 
+import com.buslink.entity.Admin;
 import com.buslink.entity.Bus;
 import com.buslink.entity.Conductor;
 import com.buslink.entity.Route;
 import com.buslink.entity.RouteStop;
+import com.buslink.enums.AdminStatus;
 import com.buslink.enums.ConductorStatus;
 import com.buslink.enums.RouteStatus;
+import com.buslink.repository.AdminRepository;
 import com.buslink.repository.BusRepository;
 import com.buslink.repository.ConductorRepository;
 import com.buslink.repository.RouteRepository;
@@ -60,14 +63,21 @@ public class DataSeeder implements ApplicationRunner {
     private final RouteStopRepository routeStopRepository;
     private final BusRepository busRepository;
     private final ConductorRepository conductorRepository;
+    private final AdminRepository adminRepository;
     private final PasswordEncoder passwordEncoder;
 
     @Override
     public void run(ApplicationArguments args) {
-        if (routeRepository.count() > 0) {
-            return;
+        if (routeRepository.count() == 0) {
+            seedRouteStopsBusAndConductor();
         }
 
+        if (adminRepository.count() == 0) {
+            seedAdmin();
+        }
+    }
+
+    private void seedRouteStopsBusAndConductor() {
         Route route = Route.builder()
                 .routeNumber("500K")
                 .routeName("Banashankari to Hebbal")
@@ -104,5 +114,15 @@ public class DataSeeder implements ApplicationRunner {
                 .status(ConductorStatus.ACTIVE)
                 .build();
         conductorRepository.save(conductor);
+    }
+
+    private void seedAdmin() {
+        Admin admin = Admin.builder()
+                .name("BusLink Admin")
+                .email("admin@buslink.com")
+                .passwordHash(passwordEncoder.encode("Admin@1234"))
+                .status(AdminStatus.ACTIVE)
+                .build();
+        adminRepository.save(admin);
     }
 }

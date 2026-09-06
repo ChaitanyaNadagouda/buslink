@@ -4,19 +4,23 @@
 Backend Foundation
 
 ## Active Sprint
-Sprint 5
+Sprint 6
 
 ## Sprint Status
-✅ Closed (2026-08-23). All Definition of Done items verified individually and
-checked — Razorpay gateway integration, `PaymentGatewayPort`/`RazorpayGatewayAdapter`
-abstraction, wallet recharge with overdraft recovery, UPI ticket payment, and all 23
-end-to-end verification steps (ngrok + Razorpay test mode) passing. One real bug
-found and fixed during live verification (webhook idempotency guard wrongly treated
-a `FAILED` payment attempt as terminal) — see `docs/sprints/Sprint-05.md`.
-`feature/payment-gateways` merged into `dev`, build clean.
+✅ Closed (2026-09-06). Admin auth layer live (`Admin` entity/principal/
+`AdminDetailsServiceImpl`, `POST /admin/auth/login` → ROLE_ADMIN JWT, seeded
+`admin@buslink.com`), all pre-existing `/admin/**` endpoints now reachable, 4
+`/admin/analytics` endpoints backed by JPQL aggregate queries, and a Redis
+caching layer (`@Cacheable` on route stops + fare rates, `@CacheEvict` on stop/
+route mutation). All 71 tests pass; full Postman + `redis-cli` verification
+done. Four plan deviations, all in the Redis layer (fare-cache split into a
+cached `getFareRate`/`FareRateDTO`, per-cache typed serializers for Jackson 3,
+plus two noted-not-actioned cleanups) — see `docs/sprints/Sprint-06.md`'s
+"Deviations from the plan" section. `feature/admin-analytics-redis` merged into
+`dev`.
 
 ## Active Sprint File
-docs/sprints/Sprint-05.md
+docs/sprints/Sprint-06.md
 
 ---
 

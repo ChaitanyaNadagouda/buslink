@@ -2,8 +2,10 @@ package com.buslink.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.buslink.entity.Admin;
 import com.buslink.entity.Conductor;
 import com.buslink.entity.User;
+import com.buslink.enums.AdminStatus;
 import com.buslink.enums.ConductorStatus;
 import io.jsonwebtoken.Claims;
 import java.util.Collections;
@@ -108,6 +110,21 @@ class JwtUtilTest {
         assertThat(jwtUtil.extractRole(userRefreshToken)).isEqualTo("PASSENGER");
         assertThat(jwtUtil.extractRole(conductorAccessToken)).isEqualTo("CONDUCTOR");
         assertThat(jwtUtil.extractRole(conductorRefreshToken)).isEqualTo("CONDUCTOR");
+    }
+
+    @Test
+    void extractRole_roundTrips_forAdminTokens() {
+        JwtUtil jwtUtil = new JwtUtil(TEST_SECRET, ONE_DAY_MS, ONE_DAY_MS);
+        Admin admin = Admin.builder()
+                .email("admin@buslink.com")
+                .status(AdminStatus.ACTIVE)
+                .build();
+
+        String adminAccessToken = jwtUtil.generateAdminAccessToken(admin);
+        String adminRefreshToken = jwtUtil.generateAdminRefreshToken(admin);
+
+        assertThat(jwtUtil.extractRole(adminAccessToken)).isEqualTo("ADMIN");
+        assertThat(jwtUtil.extractRole(adminRefreshToken)).isEqualTo("ADMIN");
     }
 
     private static UserDetails userDetailsFor(String email) {

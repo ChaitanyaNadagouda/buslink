@@ -26,10 +26,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private static final String AUTH_PATH_PREFIX = "/auth/";
     private static final String CONDUCTOR_AUTH_PATH_PREFIX = "/conductor/auth/";
     private static final String ROLE_CONDUCTOR = "CONDUCTOR";
+    private static final String ROLE_ADMIN = "ADMIN";
 
     private final JwtUtil jwtUtil;
     private final UserDetailsServiceImpl userDetailsServiceImpl;
     private final ConductorDetailsServiceImpl conductorDetailsServiceImpl;
+    private final AdminDetailsServiceImpl adminDetailsServiceImpl;
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
@@ -59,9 +61,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
             if (SecurityContextHolder.getContext().getAuthentication() == null) {
                 String email = jwtUtil.extractUsername(token);
-                UserDetails userDetails = ROLE_CONDUCTOR.equals(jwtUtil.extractRole(token))
-                        ? conductorDetailsServiceImpl.loadUserByUsername(email)
-                        : userDetailsServiceImpl.loadUserByUsername(email);
+                String role = jwtUtil.extractRole(token);
+                UserDetails userDetails;
+                if (ROLE_CONDUCTOR.equals(role)) {
+                    userDetails = conductorDetailsServiceImpl.loadUserByUsername(email);
+                } else if (ROLE_ADMIN.equals(role)) {
+                    userDetails = adminDetailsServiceImpl.loadUserByUsername(email);
+                } else {
+                    userDetails = userDetailsServiceImpl.loadUserByUsername(email);
+                }
 
                 if (jwtUtil.isTokenValid(token, userDetails)) {
                     UsernamePasswordAuthenticationToken authToken =

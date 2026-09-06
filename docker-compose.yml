@@ -33,6 +33,15 @@ services:
       - buslink_network
     restart: unless-stopped
 
+  redis:
+    image: redis:7-alpine
+    container_name: buslink-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - buslink_network
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   pgadmin_data:

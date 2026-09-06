@@ -1,5 +1,6 @@
 package com.buslink.security;
 
+import com.buslink.entity.Admin;
 import com.buslink.entity.Conductor;
 import com.buslink.entity.User;
 import io.jsonwebtoken.Claims;
@@ -23,6 +24,7 @@ public class JwtUtil {
     private static final String TOKEN_TYPE_REFRESH = "refresh";
     private static final String ROLE_PASSENGER = "PASSENGER";
     private static final String ROLE_CONDUCTOR = "CONDUCTOR";
+    private static final String ROLE_ADMIN = "ADMIN";
 
     private final SecretKey signingKey;
     private final long accessTokenExpiryMs;
@@ -51,6 +53,14 @@ public class JwtUtil {
 
     public String generateConductorRefreshToken(Conductor conductor) {
         return buildToken(conductor.getEmail(), refreshTokenExpiryMs, TOKEN_TYPE_REFRESH, ROLE_CONDUCTOR);
+    }
+
+    public String generateAdminAccessToken(Admin admin) {
+        return buildToken(admin.getEmail(), accessTokenExpiryMs, TOKEN_TYPE_ACCESS, ROLE_ADMIN);
+    }
+
+    public String generateAdminRefreshToken(Admin admin) {
+        return buildToken(admin.getEmail(), refreshTokenExpiryMs, TOKEN_TYPE_REFRESH, ROLE_ADMIN);
     }
 
     public String extractUsername(String token) {

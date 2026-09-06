@@ -536,3 +536,171 @@ Completed
   verified individually and checked, including the two flows requiring a
   live Razorpay test-mode payment through ngrok. `feature/payment-gateways`
   merged into `dev`, build clean.
+
+# Sprint 6
+
+## Admin Auth Layer (S6-01..S6-14)
+
+Completed
+
+- `Admin` entity (`entity/`) extends `BaseEntity`, table `admin`: `adminId`
+  (UUID PK), `name`, `email` (unique), `passwordHash`, `status`
+  (`AdminStatus` — a deliberately separate enum from `UserStatus`/
+  `ConductorStatus`, same reasoning as Sprint 3: admin lifecycle shouldn't
+  be coupled to passenger/conductor lifecycle types). `AdminRepository`
+  with `findByEmail`.
+- Security: `AdminPrincipal implements UserDetails` (authority
+  `ROLE_ADMIN`, `isEnabled()` = `status == ACTIVE`), `AdminDetailsServiceImpl
+  implements UserDetailsService` (throws `UsernameNotFoundException`, no
+  user enumeration) — exact same shape as `ConductorPrincipal`/
+  `ConductorDetailsServiceImpl`.
+- `JwtUtil.generateAdminAccessToken`/`generateAdminRefreshToken` — role
+  claim `"ADMIN"`, consistent with `"PASSENGER"`/`"CONDUCTOR"`.
+  `JwtUtilTest.extractRole_roundTrips_forAdminTokens` added.
+- `JwtAuthenticationFilter` — the two-way ternary
+  (`ROLE_CONDUCTOR.equals(role) ? conductorDetails : userDetails`) became a
+  three-way `if/else-if/else` (PASSENGER / CONDUCTOR / ADMIN), with
+  `AdminDetailsServiceImpl` injected as a concrete class (same two-class
+  injection pattern as Sprint 3 — avoids `NoUniqueBeanDefinitionException`
+  now that there are 3 `UserDetailsService` beans; Spring logs a benign
+  "Global Authentication Manager will not use a UserDetailsService" warning
+  about the ambiguity, which is fine — the filter picks the right one
+  per-request off the JWT role claim).
+- `SecurityConfig` — `POST /admin/auth/login` → `permitAll()`, declared
+  before the pre-existing `/admin/**` → `hasRole("ADMIN")` rule (which was
+  unreachable until now). Same ordering rule as `/conductor/auth/login`.
+- `AdminService`/`AdminServiceImpl.login` — load by email → generic
+  `ValidationException("Invalid email or password")` if absent, BCrypt
+  `matches` → same generic error, `status == ACTIVE` check → `"Account is
+  not active"`, then `AdminAuthResponseDTO` (access + refresh token,
+  adminId, name, email). `AdminAuthController` — `POST /admin/auth/login`.
+- **`DataSeeder` restructure (pre-identified gap, see `Sprint-06.md`).**
+  The real `run()` was `if (routeRepository.count() > 0) return;` — an
+  early return for the *whole method*. The plan said to add the admin seed
+  "after the conductor seed", which would have placed it after that return
+  and so it would never run on any dev DB past Sprint 1. Restructured into
+  two independent blocks: `if (routeRepository.count() == 0) {
+  seedRouteStopsBusAndConductor(); }` then `if (adminRepository.count() ==
+  0) { seedAdmin(); }`. Seeds `admin@buslink.com` / `Admin@1234`. Verified
+  on the actual dev DB (route already seeded): `admin` row created,
+  idempotent on restart.
+
+## Analytics (S6-15..S6-19)
+
+Completed
+
+- 4 JPQL aggregate `@Query` methods on `TicketRepository`, all returning
+  `List<Object[]>` (id + metric — less ceremony than 4 projection
+  interfaces): `findRevenueByRoute` (`SUM(totalFare)` where `status =
+  'PAID'`, grouped by `routeId`), `findTicketsPerDay` (`COUNT` grouped by
+  `CAST(issuedAt AS date)`), `findTopRoutesByVolume` (`COUNT` by `routeId`),
+  `findTicketsPerConductor` (`COUNT` by `conductorId`).
+  - The two live-verification concerns flagged at plan review were both
+    confirmed OK earlier (2026-09-04, recorded in `Sprint-06.md`): the
+    `status = 'PAID'` string-literal comparison against an
+    `@Enumerated(STRING)` column returns correct rows, and `CAST(issuedAt
+    AS date)` (an `Instant` → `date` cast) produced the right calendar
+    days with no timezone shift.
+- `AnalyticsServiceImpl` maps each `Object[]` to a typed DTO and enriches
+  `routeName`/`conductorName` via per-row `RouteRepository`/
+  `ConductorRepository` lookups (N+1 accepted — infrequent, single-admin,
+  not a hot path). `toLocalDate(Object)` defensively accepts either
+  `LocalDate` or `java.sql.Date` from the projection, since which one
+  Hibernate returns for a `CAST(... AS date)` column in an `Object[]`
+  wasn't assumed.
+- `AnalyticsController` — 4 `GET` endpoints under `/admin/analytics`
+  (ROLE_ADMIN), each taking `@AuthenticationPrincipal AdminPrincipal`
+  (unused in body — available for future audit logging).
+- 4 response DTOs (Java records): `RevenueByRouteDTO`, `TicketsPerDayDTO`,
+  `TopRouteDTO`, `ConductorActivityDTO`.
+
+## Redis Caching (S6-20..S6-25)
+
+Completed
+
+- `redis:7-alpine` service added to the **root** `docker-compose.yml`
+  (plan said `infrastructure/docker-compose.yml`, which doesn't exist —
+  corrected at plan review), on `buslink_network`, `6379:6379`.
+  `spring-boot-starter-data-redis` in `pom.xml`. `application.properties`:
+  `spring.data.redis.host`/`port`, `spring.cache.type=redis`,
+  `spring.cache.redis.time-to-live=3600000`.
+- `RedisConfig` (`@Configuration @EnableCaching`) — a `RedisCacheManager`
+  bean, 1h default TTL, with `withInitialCacheConfigurations` giving
+  `"route-stops"` and `"fare-calc"` their own value serializers (see
+  deviation 2 below).
+- `@Cacheable("route-stops", key="#routeId")` on
+  `FareServiceImpl.getStopsForRoute`; `@Cacheable("fare-calc",
+  key="#routeId + '-' + #originStop + '-' + #destinationStop")` on the new
+  `getFareRate`. `@CacheEvict("route-stops", key="#routeId")` on
+  `RouteServiceImpl.addStop`; `@CacheEvict({"route-stops","fare-calc"},
+  allEntries=true)` on `updateRoute`.
+
+### Deviations from the plan (full writeup in `Sprint-06.md`)
+
+1. **Fare caching split — `getFareRate` + `FareRateDTO`, not `@Cacheable`
+   on `calculateFare`.** The planned annotation on `calculateFare` would
+   cache a `totalFare` computed for one specific `adults`/`children`/
+   `infants` combination under a key that deliberately excludes passenger
+   counts — every later caller with different counts would get the wrong
+   total. And `@Cacheable` is proxy-based, so it can't sit on a method
+   only ever called internally. Built instead: a new `FareRateDTO`
+   (per-stage rate, no `totalFare`), a cached `FareService.getFareRate`,
+   and `calculateFare` (uncached) calling `self.getFareRate(...)` where
+   `self` is the bean's own proxy injected via a `@Lazy` constructor
+   param (breaks the self-referential cycle). `FareServiceImplTest`
+   reworked — manual constructor + `ReflectionTestUtils.setField(...,
+   "self", fareService)` so the proxy-less unit test resolves the
+   internal call to the same instance.
+2. **Per-cache `JacksonJsonRedisSerializer` with explicit `JavaType`, not
+   `GenericJackson2JsonRedisSerializer`.** On Spring Boot 4.1 / Jackson 3
+   (`tools.jackson.*`), a generic serializer deserializes the cached
+   `List<RouteStopResponseDTO>` back to `List<LinkedHashMap>` (erased
+   generic). `RedisConfig` builds an explicit `JavaType` via
+   `TypeFactory.constructCollectionType(List.class,
+   RouteStopResponseDTO.class)` for `"route-stops"` and
+   `JacksonJsonRedisSerializer<>(FareRateDTO.class)` for `"fare-calc"`.
+3. **`spring.cache.redis.time-to-live` is dead config.** A custom
+   `RedisCacheManager` bean makes Spring Boot ignore all
+   `spring.cache.redis.*` properties — only the bean's
+   `entryTtl(Duration.ofHours(1))` takes effect. Noted, not actioned.
+4. **Redis-repository auto-scan noise.** `spring-boot-starter-data-redis`
+   logs ~12 "Could not safely identify store assignment for repository
+   candidate" lines at startup, trying to treat JPA repos as Redis repos.
+   Harmless. Candidate fix:
+   `spring.data.redis.repositories.enabled=false`. Noted, not actioned.
+
+## Tests & Live Verification, Sprint Closure (S6-26..S6-28, 2026-09-06)
+
+Completed
+
+- `AnalyticsServiceImplTest` (5): correct totals + name enrichment,
+  descending-date ordering, volume ordering, conductor-name enrichment,
+  empty-result → empty list. Full suite: **71 run, 0 failures, 0 errors**
+  (66 pre-existing + 5 new; `FareServiceImplTest` reworked in place, still
+  5). `BusLinkApplicationTests.contextLoads` — passes with Postgres up
+  (it had errored earlier only because the DB container wasn't running —
+  not a regression).
+- S6-27 live verification — Postman Desktop by the user + `redis-cli`,
+  same established pattern as Sprints 2–5. Fresh DB (new Docker volume),
+  wallet topped up via `psql UPDATE wallet SET balance = 150` (no
+  recharge-without-Razorpay path — same as Sprint 4/5):
+  - Admin: login → 200 + `"ADMIN"` JWT; wrong password → 400 generic
+    message. `GET /admin/routes` — admin 200, passenger 403, no-token 401.
+  - Analytics: issued + wallet-paid one ticket (route 500K, seeded
+    conductor, ₹90). All 4 endpoints returned correct enriched data
+    (revenue `₹90.00`, tickets-per-day `2026-09-06 → 1`, top-routes `1`,
+    conductor-activity `Test Conductor → 1`); conductor token → 403.
+  - Redis: `route-stops::<routeId>` — key present after 1st call, value
+    readable JSON (29 stops), `TTL` ~2987 counting down, 2nd call served
+    from cache. `fare-calc::<routeId>-HSR Layout-KR Puram Railway Station`
+    — value is a `FareRateDTO` JSON with **no `totalFare`**; changing
+    `adults` 2 → 5 produced no new key and a correctly recomputed total
+    (proves the split works end to end). `POST /admin/routes/{id}/stops`
+    → `route-stops` key gone (`@CacheEvict`), `fare-calc` untouched;
+    next `GET stops` → 30 stops, key re-cached.
+  - Test artifact cleaned up: the `Postman Test Stop …` row (route now
+    back to 29 stops), and the stale `route-stops` cache entry flushed.
+- **Sprint 6 declared complete (2026-09-06).** All Definition of Done
+  items verified and checked (pgAdmin visual check of the `admin` row
+  deliberately skipped — `psql` is authoritative for row presence).
+  `feature/admin-analytics-redis` merged into `dev`, build clean.
