@@ -787,3 +787,243 @@ Alternatives considered and rejected: a nullable column (Sprint 4's
 `ddl-auto=update`-can't-alter-constraints problem would apply identically
 here), or a sentinel/marker UUID (a footgun for anyone querying the table
 later without knowing the convention).
+
+## Sprint 6
+
+### Spring Cache Abstraction
+
+**Q: What does `@Cacheable` actually do, mechanically?**
+A: `@EnableCaching` makes Spring wrap the bean in an AOP proxy with a
+`CacheInterceptor`. On a call the interceptor: evaluates the SpEL `key`,
+asks the `CacheManager` for the named `Cache`, does `cache.get(key)` — on a
+hit it returns the cached value and **the real method never runs**; on a
+miss it invokes the method, `cache.put(key, result)`, and returns. `@CacheEvict`
+runs `cache.evict(key)` (by default *after* the method returns normally).
+
+```
+caller ─▶ proxy ─▶ CacheInterceptor
+                     │  key = SpEL(#routeId)
+                     │  RedisCache.get("route-stops::<uuid>")
+             ┌───────┴────────┐
+        HIT  ▼                ▼  MISS
+   deserialize &         real method → DB query
+   return (no DB)        → RedisCache.put(...)  →  SET route-stops::<uuid> <json> PX ttl
+                         → return
+```
+
+**Q: Why the cache *abstraction* instead of injecting `RedisTemplate` and
+caching by hand?**
+A: Keeps caching declarative and out of the business logic — the service
+method reads like it always hits the DB; caching is a cross-cutting concern
+applied by annotation. Also swappable: the same annotations work over
+Caffeine, EhCache, or a `ConcurrentHashMap` in tests, by changing only the
+`CacheManager` bean. Downside: you lose fine-grained control (no partial
+updates, no custom hit/miss metrics without extra work), and the
+self-invocation gotcha below.
+
+**Q: The physical Redis key is `route-stops::c3a11108-…`. Where does the
+`route-stops::` come from?**
+A: `RedisCacheConfiguration`'s default key prefix is `<cacheName>::`. It
+namespaces logical caches inside one Redis instance and lets
+`@CacheEvict(allEntries=true)` sweep just that cache (`KEYS route-stops::*`
+→ `DEL`). Keys are serialized with `StringRedisSerializer` (human-readable);
+values with whatever you configure.
+
+### Proxy-based AOP & self-invocation
+
+**Q: `calculateFare` and `getFareRate` are in the same class. `getFareRate`
+has `@Cacheable`. Why doesn't `calculateFare` calling `getFareRate()` hit
+the cache?**
+A: The proxy sits *between* callers and the bean. An external caller goes
+`proxy → interceptor → real method`. But `this.getFareRate()` from inside
+`calculateFare` is a direct call on the target object — it never touches the
+proxy, so no interceptor, no caching. Same reason `@Transactional`,
+`@Async`, `@PreAuthorize` all silently do nothing on self-invocation.
+
+**Q: How was it fixed here, and what are the alternatives?**
+A: Injected the bean's own proxy back into itself as `FareService self`
+(constructor param, `@Lazy` to break the "bean needs itself to be
+constructed" cycle), and `calculateFare` calls `self.getFareRate(...)`.
+Alternatives: (1) split the cached method into a separate bean — cleanest,
+but more classes for a two-method case; (2) `AopContext.currentProxy()` —
+needs `@EnableAspectJAutoProxy(exposeProxy = true)` and a static call, worse
+smell; (3) full AspectJ compile/load-time weaving — real self-invocation
+support, heavy for this.
+
+### Why cache a `FareRateDTO`, not a `FareResponseDTO`
+
+**Q: The fare cache key is `route + origin + destination` — passenger counts
+excluded. What breaks if you `@Cacheable` the full `calculateFare` (which
+returns a `totalFare`)?**
+A: The first caller's `adults/children/infants` get baked into a
+`totalFare` that's then served to every later caller with a *different* mix
+— silently wrong. Fixed by caching only the count-independent part (per-stage
+`adultFare`/`childFare` in a `FareRateDTO`) and recomputing `totalFare = adults×adultFare + children×childFare`
+per request from the cached rate. One entry ("HSR→KR Puram") serves all
+passenger combinations — maximum reuse, no correctness risk.
+
+### `@CacheEvict`: key-scoped vs `allEntries`
+
+| Operation | Eviction | Why |
+|---|---|---|
+| `addStop(routeId)` | `route-stops` key `#routeId` | only that route's stop list is now stale |
+| `updateRoute(routeId)` | `route-stops` **and** `fare-calc`, `allEntries=true` | `updateRoute` can change `farePerStage`, which invalidates *every* cached fare on that route; key-by-key eviction of a composite `route-origin-dest` key is impractical for a rare admin op — clearing all is simpler and safe |
+
+### Redis value serialization (Boot 4 / Jackson 3)
+
+**Q: Cached value is `List<RouteStopResponseDTO>`. With a generic JSON
+serializer, the 2nd call returns `List<LinkedHashMap>`. Why, and the fix?**
+A: Type erasure — at runtime the serializer sees `List<?>` and has no
+element type to target, so Jackson builds the default `Map` per element.
+Fix: register a serializer that carries the concrete type —
+`JacksonJsonRedisSerializer` built with an explicit
+`JavaType` (`TypeFactory.constructCollectionType(List.class,
+RouteStopResponseDTO.class)`), wired per-cache via
+`RedisCacheManager` `withInitialCacheConfigurations(...)`. JSON (not JDK
+serialization) so values are inspectable in `redis-cli` and not coupled to
+class `serialVersionUID`.
+
+**Q: `spring-boot-starter-data-redis` logged "Could not identify store
+assignment for repository candidate ...Repository" for every JPA repo. Bug?**
+A: No — the starter auto-enables Spring Data **Redis repository** scanning,
+which inspects every `Repository` interface to see if it's a `@RedisHash`
+store; ours are all JPA, so it logs and moves on (`Found 0 Redis
+repository interfaces`). We use Redis purely as a cache. Silence it with
+`spring.data.redis.repositories.enabled=false`.
+
+### JPQL aggregate queries
+
+**Q: The analytics queries return `List<Object[]>`. Why not projection
+interfaces or DTOs in the query?**
+A: Each query is exactly `(id, metric)` — two columns. `Object[]` is the
+least ceremony for 4 such queries; a projection interface per query is 4
+extra types for no real gain. Constructor expressions
+(`SELECT new com.buslink...DTO(...)`) can't build the *enriched* DTO anyway
+(routeName/conductorName need a second lookup). Trade-off: `Object[]` access
+is positional and uncast (`(UUID) row[0]`, `(Long) row[1]`) — fragile if the
+`SELECT` list changes; kept safe by mapping to a typed DTO immediately in the
+service.
+
+**Q: `SELECT CAST(t.issuedAt AS date), COUNT(t) ... GROUP BY CAST(t.issuedAt AS date)` —
+`issuedAt` is an `Instant`. Risks?**
+A: Two. (1) The cast can come back as `java.time.LocalDate` *or*
+`java.sql.Date` depending on driver/Hibernate resolution for an `Object[]`
+projection — `toLocalDate(Object)` handles both rather than assuming. (2) An
+`Instant` is UTC; `CAST ... AS date` in Postgres uses the session timezone,
+so a ticket issued 00:30 IST could bucket into the previous UTC day. Both
+were verified against real data at plan-review time (dates matched, no
+shift), not just trusted because the JPQL parsed.
+
+**Q: The service does a `routeRepository.findById` per analytics row — N+1.
+Acceptable?**
+A: Here, yes. It's a single admin hitting a reporting endpoint occasionally,
+row counts are tiny (routes/conductors number in the tens), and it's not on
+any hot path. If it grew, the fix is a single `WHERE routeId IN (:ids)`
+batch lookup into a `Map`, or a join projection. Premature to do that now —
+but you name the escape hatch in the interview.
+
+### Multi-principal Spring Security
+
+**Q: You now have 3 `UserDetailsService` beans (user/conductor/admin).
+Spring logs a warning and login could be ambiguous. How is it resolved?**
+A: The JWT carries a `role` claim. `JwtAuthenticationFilter` reads it and
+explicitly picks the matching service (`PASSENGER` → `UserDetailsServiceImpl`,
+`CONDUCTOR` → `ConductorDetailsServiceImpl`, `ADMIN` → `AdminDetailsServiceImpl`),
+each **injected as its concrete class** — injecting the `UserDetailsService`
+interface would throw `NoUniqueBeanDefinitionException`. The "Global
+Authentication Manager will not use a UserDetailsService" warning is benign:
+we don't use the global `AuthenticationManager` for form login; each
+service's `loadUserByUsername` is called directly from the filter or the
+login service.
+
+**Q: Why a separate `Admin` entity instead of `User` with `role = ADMIN`?**
+A: Same call as `Conductor` vs `User` in Sprint 3. `Admin` has no wallet, no
+QR token, no `deviceId`, no `mobileNo`-OTP path — the field sets barely
+overlap, so one table would be mostly-null columns plus `WHERE role = ?` on
+every query. Separate entities keep each aggregate cohesive and each
+`UserDetailsService` trivial. Cost: 3 near-identical `*Principal`/
+`*DetailsServiceImpl` pairs — accepted; they're ~20 lines each and fully
+independent.
+
+### Spring framework mechanics (the parts that bit this sprint)
+
+**Q: What kind of proxy does Spring create — and what's the difference
+between JDK dynamic proxies and CGLIB?**
+A:
+| | JDK dynamic proxy | CGLIB |
+|---|---|---|
+| How | new class implementing the **same interfaces**, delegates to target | runtime **subclass** of the target class, overrides methods |
+| Needs | the bean to have an interface | nothing (works on concrete classes) |
+| Can't proxy | — | `final` classes, `final`/`private`/`static` methods |
+| Spring Boot default | — | **CGLIB** (since Boot 2.0 `proxyTargetClass=true` everywhere) |
+
+Either way it's still a *separate object* wrapping the target, so the
+interception (caching, `@Transactional`, security) only happens when a call
+**enters through the proxy** — i.e. from another bean. `this.method()` inside
+the bean calls the raw target and skips all of it. That's the self-invocation
+limitation, and it's inherent to proxy-based AOP regardless of proxy type.
+
+**Q: I added `spring-boot-starter-data-redis` and Redis caching "just
+worked" with almost no config. And when I *did* write a `RedisCacheManager`
+bean, the `spring.cache.redis.time-to-live` property stopped having any
+effect. Why both?**
+A: Spring Boot **auto-configuration**. Each starter ships
+`@AutoConfiguration` classes full of `@Conditional...` beans:
+`RedisAutoConfiguration` sees `spring-data-redis` on the classpath and no
+existing `RedisConnectionFactory`, so it creates a Lettuce one from
+`spring.data.redis.*`. `RedisCacheConfiguration` (cache side) sees
+`spring.cache.type=redis` and **`@ConditionalOnMissingBean(CacheManager.class)`**
+— it builds a `RedisCacheManager` from `spring.cache.redis.*` *only if you
+haven't defined one*. The moment you declare your own `@Bean RedisCacheManager`,
+that condition is false, the auto-configured one backs off entirely, and the
+`spring.cache.redis.*` properties (which only fed the auto-configured bean)
+are dead. Your bean is now the single source of truth — TTL, serializers, all
+of it. This "define your own bean → auto-config gets out of the way" pattern
+is everywhere in Boot.
+
+**Q: `FareServiceImpl`'s constructor takes `@Lazy FareService self` — a
+reference to itself. Why does that even compile/start, and what does `@Lazy`
+do here?**
+A: Without `@Lazy` it's a circular dependency: to build `FareServiceImpl`
+Spring needs a `FareService`, which is `FareServiceImpl`, which isn't built
+yet → `BeanCurrentlyInCreationException` (constructor injection can't do the
+"partially-built bean" trick that field injection sometimes can). `@Lazy` on
+the parameter tells Spring to inject a **lazy proxy** instead of the real
+bean — a stand-in that resolves the actual `FareServiceImpl` (the *real*
+caching proxy) only on first method call, by which time the context is fully
+built. So `self` ends up pointing at the same proxy an external caller would
+use — which is exactly what we need for the `@Cacheable` interception.
+
+**Q: You inject `UserDetailsServiceImpl` (the concrete class), not
+`UserDetailsService` (the interface). Why does that matter, and what are the
+other ways out?**
+A: With 3 beans implementing `UserDetailsService`, asking for the interface
+type is ambiguous → `NoUniqueBeanDefinitionException` at startup. Options:
+(1) inject the concrete type — unambiguous, what we do; (2) `@Qualifier("beanName")`
+at the injection point; (3) `@Primary` on one bean (wrong here — there's no
+"default" principal service); (4) inject `List<UserDetailsService>` or
+`Map<String, UserDetailsService>` and pick at runtime. Field/param **name**
+also acts as an implicit qualifier — `UserDetailsService userDetailsServiceImpl`
+would resolve by matching the bean name — but relying on that is fragile, so
+the concrete type is clearer.
+
+**Q: `DataSeeder implements ApplicationRunner`. When and why does it run?
+Difference from `CommandLineRunner`?**
+A: Both are callbacks Spring Boot invokes **once, after the application
+context is fully refreshed and just before `run()` returns** — i.e. app is
+ready, all beans wired, DataSource live. `CommandLineRunner` gets the raw
+`String[]` args; `ApplicationRunner` gets a parsed `ApplicationArguments`
+(option vs non-option args). Multiple runners run in `@Order` sequence. It's
+the standard place for one-off startup work like dev seeding — and because
+it's a normal bean, it can be `@Profile("dev")`-gated or given an idempotency
+guard (here: `if (routeRepository.count() == 0)` / `if (adminRepository.count() == 0)`).
+
+**Q: `@Configuration` vs `@Component` for a class holding `@Bean` methods —
+does it matter?**
+A: Yes. `@Configuration` runs in **"full" mode**: the class itself is
+CGLIB-proxied so that a `@Bean` method calling another `@Bean` method returns
+the *shared singleton*, not a fresh instance. `@Component` (or
+`@Configuration(proxyBeanMethods = false)`) is **"lite" mode**: no proxy,
+inter-method calls create new objects. For `RedisConfig` it happens not to
+matter (one bean, no inter-bean calls), but the habit is: `@Configuration`
+for bean-definition classes.
