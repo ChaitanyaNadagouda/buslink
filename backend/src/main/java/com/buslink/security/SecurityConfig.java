@@ -34,6 +34,8 @@ public class SecurityConfig {
                         .permitAll()
                         .requestMatchers(HttpMethod.POST, "/webhooks/razorpay")
                         .permitAll()
+                        .requestMatchers(HttpMethod.POST, "/admin/auth/login")
+                        .permitAll()
                         .requestMatchers("/admin/**")
                         .hasRole("ADMIN")
                         .requestMatchers("/routes/*/stops", "/routes/*/fare")

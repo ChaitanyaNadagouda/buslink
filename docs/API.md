@@ -14,16 +14,21 @@ Sprint 5 added real Razorpay (test mode) payment gateway integration: wallet rec
 and UPI ticket payment initiation endpoints, plus the public, signature-verified
 `POST /webhooks/razorpay` that's the actual trust boundary confirming money movement —
 see `ARCHITECTURE.md` for the `PaymentGatewayPort` abstraction behind it.
+Sprint 6 unlocked the admin layer: `POST /admin/auth/login` (`Admin` auth) mints a
+`ROLE_ADMIN` JWT, so every pre-existing `/admin/**` endpoint (`Routes`/`Buses`) is now
+reachable, plus 4 new read-only `/admin/analytics` endpoints. It also added a Redis
+cache in front of the two conductor-facing read endpoints (`GET /routes/{routeId}/stops`
+and `.../fare`) — transparent to callers, see `ARCHITECTURE.md`.
 All follow the `ApiResponse<T>` envelope (`{success, message, data}`) on both success and
 error paths. See `postman/BusLink-API.postman_collection.json` for a runnable collection.
 
-**Note on `/admin/**` endpoints:** every `Routes`/`Buses` admin endpoint below is fully
-implemented and correctly enforces `ROLE_ADMIN` — but as of Sprint 3, nothing in the
-system can actually obtain a `ROLE_ADMIN` JWT (no `Admin` entity, principal, or login
-endpoint exists yet). These endpoints are exercised only by direct testing (verifying
-they reject unauthenticated/wrong-role requests); the seed data they'd normally create
-(Route 500K, its stops, a test bus/conductor) is instead created by `DataSeeder`
-bypassing the HTTP layer entirely. Real admin authentication is Sprint 4+ scope.
+**Note on `/admin/**` endpoints (updated Sprint 6):** these are now fully reachable.
+`POST /admin/auth/login` (see **Admin Auth** below) authenticates a seeded `Admin`
+account (`admin@buslink.com` / `Admin@1234`, created by `DataSeeder`) and returns a
+`ROLE_ADMIN` access + refresh token. Before Sprint 6 no admin JWT could be minted, so
+the `Routes`/`Buses` admin endpoints were exercised only by direct reject-testing and
+the seed data was created by `DataSeeder` bypassing the HTTP layer — that's still how
+the seed data is created, but the endpoints themselves now work with an admin token.
 
 ---
 
@@ -332,6 +337,54 @@ No body. Identity comes from `@AuthenticationPrincipal ConductorPrincipal`.
 | 401 | Missing/invalid/expired Bearer token |
 | 403 | Valid token, but wrong role (e.g. a passenger token) |
 
+## Admin Auth
+
+### POST /admin/auth/login
+
+**Purpose**
+Authenticate an admin by email + password, returning a `ROLE_ADMIN` access +
+refresh token. Added in Sprint 6 — this is what makes every `/admin/**` endpoint
+reachable. Same recipe as conductor auth: a separate `Admin` entity, a separate
+`AdminPrincipal`/`AdminDetailsServiceImpl`, a `"ADMIN"` role claim in the JWT.
+
+**Authentication Requirement**
+None (public — `permitAll()`, declared before the `/admin/**` → `hasRole("ADMIN")`
+rule).
+
+**Request**
+```json
+{
+  "email": "admin@buslink.com",
+  "password": "Admin@1234"
+}
+```
+
+**Validation Rules**
+- `email` — required, must be a valid email address
+- `password` — required, non-blank
+
+**Response** — `200 OK`
+```json
+{
+  "success": true,
+  "message": "Success",
+  "data": {
+    "accessToken": "<jwt, role=ADMIN>",
+    "refreshToken": "<jwt, role=ADMIN>",
+    "adminId": "<uuid>",
+    "name": "BusLink Admin",
+    "email": "admin@buslink.com"
+  }
+}
+```
+
+**Error Codes**
+| Status | Condition |
+|---|---|
+| 400 | Wrong email/password, or account not `ACTIVE` (wrong credentials collapse to a generic `"Invalid email or password"`, same enumeration-prevention reasoning as passenger/conductor login; an inactive account returns `"Account is not active"`) |
+
+---
+
 ## Routes
 
 All endpoints in this section except the conductor-facing ones (marked below) require
@@ -465,6 +518,11 @@ Bearer JWT, `ROLE_CONDUCTOR`.
 | `search=<prefix>` | Stops whose name starts with `<prefix>` (case-insensitive) — origin dropdown |
 | `after=<stopName>&search=<prefix>` | Stops after `<stopName>`'s position matching `<prefix>` — destination dropdown; `search` defaults to empty (matches everything) if omitted |
 
+**Caching (Sprint 6):** the no-query-param variant is `@Cacheable("route-stops",
+key=#routeId)` — the full stop list is served from Redis after the first call
+(1h TTL), and evicted whenever a stop is added to (or the route is updated) that
+`routeId`. The `search`/`after` variants are not cached. Transparent to callers.
+
 **Response** — `200 OK`, array of `RouteStopResponseDTO`.
 
 **Error Codes**
@@ -506,6 +564,14 @@ Bearer JWT, `ROLE_CONDUCTOR`.
 `stagesCrossed = (destinationStage - originStage) + 1`; `adultFare = stagesCrossed ×
 farePerStage`; `childFare = adultFare / 2` (ceiling-rounded); `infantFare` always `0`;
 `totalFare = adults × adultFare + children × childFare`.
+
+**Caching (Sprint 6):** the per-stage rate (`originStop`, `destinationStop`,
+`stagesCrossed`, `adultFare`, `childFare`, `infantFare` — internally a
+`FareRateDTO`) is `@Cacheable("fare-calc", key=#routeId + '-' + #origin + '-' +
+#destination)`. Passenger counts are **not** in the key — `totalFare` is
+recomputed per request from the cached rate, so one cache entry serves every
+`adults`/`children`/`infants` combination for that stop pair. Evicted on any
+`updateRoute` (which can change `farePerStage`). Transparent to callers.
 
 **Error Codes**
 | Status | Condition |
@@ -575,6 +641,43 @@ accepted given the domain's real fleet size; see `ARCHITECTURE.md`/`Sprint-03.md
 | Status | Condition |
 |---|---|
 | 404 | `conductorId` or `busId` doesn't exist |
+
+## Analytics
+
+Added in Sprint 6. Four read-only aggregate endpoints under `/admin/analytics`,
+all `ROLE_ADMIN`, all returning `ApiResponse<List<...DTO>>`. Backed by JPQL
+aggregate `@Query` methods on `TicketRepository` (`Object[]` projections); the
+service layer enriches route/conductor names via per-row lookups (N+1 accepted —
+infrequent, single-admin, not a hot path) and orders by the metric descending.
+No pagination or date-range filters yet — the whole aggregate is returned.
+
+| Endpoint | Returns | One row |
+|---|---|---|
+| `GET /admin/analytics/revenue-by-route` | `RevenueByRouteDTO[]` | `{ routeId, routeName, totalRevenue }` — `SUM(totalFare)` over `PAID` tickets, grouped by route |
+| `GET /admin/analytics/tickets-per-day` | `TicketsPerDayDTO[]` | `{ date, ticketCount }` — `COUNT` grouped by `CAST(issuedAt AS date)`, all statuses |
+| `GET /admin/analytics/top-routes` | `TopRouteDTO[]` | `{ routeId, routeName, ticketCount }` — `COUNT` of all tickets per route |
+| `GET /admin/analytics/conductor-activity` | `ConductorActivityDTO[]` | `{ conductorId, conductorName, ticketsIssued }` — `COUNT` of tickets per conductor |
+
+**Example** — `GET /admin/analytics/revenue-by-route`, `200 OK`:
+```json
+{
+  "success": true,
+  "message": "Success",
+  "data": [
+    { "routeId": "<uuid>", "routeName": "Banashankari to Hebbal", "totalRevenue": 90.00 }
+  ]
+}
+```
+Empty list (not an error) when there's no matching data — e.g. `revenue-by-route`
+before any ticket is `PAID`.
+
+**Error Codes** (all four)
+| Status | Condition |
+|---|---|
+| 401 | Missing/invalid/expired Bearer token |
+| 403 | Valid token, wrong role (passenger or conductor token) |
+
+---
 
 ## Tickets
 
@@ -1098,7 +1201,16 @@ _No endpoints yet._
 
 ## Admin APIs
 
-See **Routes** and **Buses** above — every `/admin/**` endpoint requires `ROLE_ADMIN`
-and is documented under its own resource rather than duplicated in a separate bucket
-here. See the note at the top of this document: none of them are actually reachable
-yet, since no admin login path exists.
+Every `/admin/**` endpoint requires `ROLE_ADMIN`. Obtain a token from **Admin Auth**
+(`POST /admin/auth/login`), then:
+
+- **Admin Auth** — `POST /admin/auth/login` (this section is public; everything
+  else here needs the token it returns)
+- **Routes** — `POST/GET /admin/routes`, `GET /admin/routes/{routeId}`,
+  `PUT /admin/routes/{routeId}/status`, `POST/GET /admin/routes/{routeId}/stops`
+- **Buses** — `POST/GET /admin/buses`, `GET /admin/buses/{busId}`,
+  `PUT /admin/conductors/{conductorId}/assign-bus`
+- **Analytics** — `GET /admin/analytics/{revenue-by-route,tickets-per-day,top-routes,conductor-activity}`
+
+Each is documented under its own resource section above rather than duplicated here.
+As of Sprint 6 they are all reachable (before Sprint 6, no admin login path existed).

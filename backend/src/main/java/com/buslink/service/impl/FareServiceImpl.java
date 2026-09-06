@@ -1,5 +1,6 @@
 package com.buslink.service.impl;
 
+import com.buslink.dto.response.FareRateDTO;
 import com.buslink.dto.response.FareResponseDTO;
 import com.buslink.dto.response.RouteStopResponseDTO;
 import com.buslink.entity.Route;
@@ -13,17 +14,26 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
 import java.util.UUID;
-import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 @Service
-@RequiredArgsConstructor
 public class FareServiceImpl implements FareService {
 
     private final RouteRepository routeRepository;
     private final RouteStopRepository routeStopRepository;
+    private final FareService self;
+
+    public FareServiceImpl(
+            RouteRepository routeRepository, RouteStopRepository routeStopRepository, @Lazy FareService self) {
+        this.routeRepository = routeRepository;
+        this.routeStopRepository = routeStopRepository;
+        this.self = self;
+    }
 
     @Override
+    @Cacheable(value = "route-stops", key = "#routeId")
     public List<RouteStopResponseDTO> getStopsForRoute(UUID routeId) {
         return routeStopRepository.findByRouteIdOrderByStopSequenceAsc(routeId).stream()
                 .map(this::toResponseDTO)
@@ -52,8 +62,8 @@ public class FareServiceImpl implements FareService {
     }
 
     @Override
-    public FareResponseDTO calculateFare(
-            UUID routeId, String originStop, String destinationStop, int adults, int children, int infants) {
+    @Cacheable(value = "fare-calc", key = "#routeId + '-' + #originStop + '-' + #destinationStop")
+    public FareRateDTO getFareRate(UUID routeId, String originStop, String destinationStop) {
         RouteStop origin = findStopByName(routeId, originStop);
         RouteStop destination = findStopByName(routeId, destinationStop);
 
@@ -69,13 +79,23 @@ public class FareServiceImpl implements FareService {
         BigDecimal adultFare = route.getFarePerStage().multiply(BigDecimal.valueOf(stagesCrossed));
         BigDecimal childFare = adultFare.divide(BigDecimal.valueOf(2), 2, RoundingMode.CEILING);
         BigDecimal infantFare = BigDecimal.ZERO;
-        BigDecimal totalFare = adultFare
+
+        return new FareRateDTO(
+                origin.getStopName(), destination.getStopName(), stagesCrossed, adultFare, childFare, infantFare);
+    }
+
+    @Override
+    public FareResponseDTO calculateFare(
+            UUID routeId, String originStop, String destinationStop, int adults, int children, int infants) {
+        FareRateDTO rate = self.getFareRate(routeId, originStop, destinationStop);
+
+        BigDecimal totalFare = rate.adultFare()
                 .multiply(BigDecimal.valueOf(adults))
-                .add(childFare.multiply(BigDecimal.valueOf(children)));
+                .add(rate.childFare().multiply(BigDecimal.valueOf(children)));
 
         return new FareResponseDTO(
-                origin.getStopName(), destination.getStopName(), stagesCrossed, adultFare, childFare, infantFare,
-                totalFare);
+                rate.originStop(), rate.destinationStop(), rate.stagesCrossed(), rate.adultFare(), rate.childFare(),
+                rate.infantFare(), totalFare);
     }
 
     private RouteStop findStopByName(UUID routeId, String stopName) {

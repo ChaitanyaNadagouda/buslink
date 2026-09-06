@@ -1,4 +1,4 @@
-  {
+{
   "info": {
     "_postman_id": "c56b0cb3-6605-4eb7-aadf-b7616de42023",
     "name": "BusLink API",
@@ -113,6 +113,36 @@
     },
     {
       "key": "upiPaymentId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "adminAccessToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "newBusId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "conductorId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "routeTotalStops",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "lastStopStageNumber",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "nextStopSequence",
       "value": "",
       "type": "string"
     }
@@ -321,6 +351,9 @@
                   "    if (body.data.accessToken) {",
                   "        pm.collectionVariables.set('conductorAccessToken', body.data.accessToken);",
                   "    }",
+                  "    if (body.data.conductorId) {",
+                  "        pm.collectionVariables.set('conductorId', body.data.conductorId);",
+                  "    }",
                   "    if (body.data.routeId) {",
                   "        pm.collectionVariables.set('routeId', body.data.routeId);",
                   "    }",
@@ -339,6 +372,10 @@
                   "",
                   "pm.test('routeId is non-null', function () {",
                   "    pm.expect(pm.collectionVariables.get('routeId')).to.not.be.empty;",
+                  "});",
+                  "",
+                  "pm.test('conductorId is non-null', function () {",
+                  "    pm.expect(pm.collectionVariables.get('conductorId')).to.not.be.empty;",
                   "});",
                   "",
                   "pm.test('busId is non-null', function () {",
@@ -377,6 +414,156 @@
       ]
     },
     {
+      "name": "Admin Auth",
+      "item": [
+        {
+          "id": "3ee75367-e683-4a9e-b0f0-6ff1dc1e230e",
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.success && body.data && body.data.accessToken) {",
+                  "    pm.collectionVariables.set('adminAccessToken', body.data.accessToken);",
+                  "}",
+                  "",
+                  "pm.test('Login returned 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('adminAccessToken captured', function () {",
+                  "    pm.expect(pm.collectionVariables.get('adminAccessToken')).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@buslink.com\",\n  \"password\": \"Admin@1234\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "auth",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "id": "56193dc0-9a8e-49b9-8884-ba86529307e5",
+          "name": "Login (Wrong Password - expect 400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Wrong password returns 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test('Error message is generic (no user enumeration)', function () {",
+                  "    pm.expect(pm.response.json().message).to.eql('Invalid email or password');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@buslink.com\",\n  \"password\": \"WrongPassword@1234\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "auth",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Conductor",
+      "item": [
+        {
+          "id": "815a9468-87a3-4a12-9ed2-1593fa2900c8",
+          "name": "Get Profile",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Profile has conductorId and busId', function () {",
+                  "    const dto = pm.response.json().data;",
+                  "    pm.expect(dto.conductorId).to.not.be.empty;",
+                  "    pm.expect(dto.busId).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{conductorAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/conductor/profile",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "conductor",
+                "profile"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
       "name": "Route",
       "item": [
         {
@@ -388,13 +575,18 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "const body = pm.response.json();",
+                  "const stops = body.data;",
+                  "if (stops && stops.length > 0) {",
+                  "    pm.collectionVariables.set('lastStopStageNumber', stops[stops.length - 1].stageNumber);",
+                  "}",
+                  "",
                   "pm.test('Returns 200', function () {",
                   "    pm.response.to.have.status(200);",
                   "});",
                   "",
-                  "pm.test('Returns 29 stops in sequence order', function () {",
-                  "    const stops = pm.response.json().data;",
-                  "    pm.expect(stops).to.have.lengthOf(29);",
+                  "pm.test('Stops are returned in ascending sequence order', function () {",
+                  "    pm.expect(stops.length).to.be.above(0);",
                   "    for (let i = 1; i < stops.length; i++) {",
                   "        pm.expect(stops[i].stopSequence).to.be.above(stops[i - 1].stopSequence);",
                   "    }",
@@ -669,6 +861,733 @@
               "path": [
                 "admin",
                 "routes"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "id": "abbaa2e2-980a-4fab-bb9d-4ea3022e196b",
+          "name": "Get Routes (Admin Token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Returns a non-empty route list', function () {",
+                  "    pm.expect(pm.response.json().data).to.be.an('array').that.is.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "routes"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "id": "73885877-edcb-42c9-b0d0-2e1d0e6cf1ac",
+          "name": "Get Routes (Passenger Token - expect 403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('ROLE_PASSENGER cannot access /admin/** - expect 403', function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "routes"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "id": "ac26360f-c460-45cd-bbae-e8228654acd7",
+          "name": "Get Routes (No Token - expect 401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('No token on /admin/** returns 401', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "routes"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "id": "fc021f1e-0828-4c5a-bb20-cd65ee9695da",
+          "name": "Get Route By Id (Admin Token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.success && body.data && body.data.totalStops) {",
+                  "    pm.collectionVariables.set('routeTotalStops', body.data.totalStops);",
+                  "}",
+                  "",
+                  "pm.test('Returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('routeId matches requested route', function () {",
+                  "    pm.expect(body.data.routeId).to.eql(pm.collectionVariables.get('routeId'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/routes/{{routeId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "routes",
+                "{{routeId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "id": "4c6100b4-1cee-46dd-8f55-809ae9caf52a",
+          "name": "Update Route Status (Admin Token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Status is ACTIVE', function () {",
+                  "    pm.expect(pm.response.json().data.status).to.eql('ACTIVE');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminAccessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"ACTIVE\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/routes/{{routeId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "routes",
+                "{{routeId}}",
+                "status"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "id": "ebb8a463-21c4-4358-9cc1-a443a104353c",
+          "name": "Add Stop (Admin Token)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const totalStops = parseInt(pm.collectionVariables.get('routeTotalStops'), 10);",
+                  "pm.collectionVariables.set('nextStopSequence', totalStops + 1);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('New stop has expected sequence', function () {",
+                  "    const expected = parseInt(pm.collectionVariables.get('nextStopSequence'), 10);",
+                  "    pm.expect(pm.response.json().data.stopSequence).to.eql(expected);",
+                  "});",
+                  "",
+                  "console.log('Now check: redis-cli KEYS \"*route-stops*\" should show the key EVICTED for this routeId');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminAccessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"stopName\": \"Postman Test Stop {{$guid}}\",\n  \"stopSequence\": {{nextStopSequence}},\n  \"stageNumber\": {{lastStopStageNumber}}\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/routes/{{routeId}}/stops",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "routes",
+                "{{routeId}}",
+                "stops"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Admin Bus",
+      "item": [
+        {
+          "id": "f4562d3d-f3e1-41e9-a30e-7f79af5e401a",
+          "name": "Create Bus (Admin Token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.success && body.data && body.data.busId) {",
+                  "    pm.collectionVariables.set('newBusId', body.data.busId);",
+                  "}",
+                  "",
+                  "pm.test('Returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('newBusId captured', function () {",
+                  "    pm.expect(pm.collectionVariables.get('newBusId')).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminAccessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"busNumber\": \"KA-01-TEST-{{$guid}}\",\n  \"routeId\": \"{{routeId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/buses",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "buses"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "id": "0ca6d249-ed61-4d9a-9f4f-82f4baca94d8",
+          "name": "Get All Buses (Admin Token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Returns a non-empty bus list', function () {",
+                  "    pm.expect(pm.response.json().data).to.be.an('array').that.is.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/buses",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "buses"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "id": "ab496f94-2747-4b8a-8bc0-50dfe2b19d38",
+          "name": "Get Bus By Id (Admin Token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('busId matches requested bus', function () {",
+                  "    pm.expect(pm.response.json().data.busId).to.eql(pm.collectionVariables.get('newBusId'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/buses/{{newBusId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "buses",
+                "{{newBusId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "id": "96ce18cc-66d4-43bc-ade6-26755c61f30b",
+          "name": "Assign Bus To Conductor (Admin Token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Conductor now points to the new bus', function () {",
+                  "    pm.expect(pm.response.json().data.busId).to.eql(pm.collectionVariables.get('newBusId'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminAccessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"busId\": \"{{newBusId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/conductors/{{conductorId}}/assign-bus",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "conductors",
+                "{{conductorId}}",
+                "assign-bus"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "id": "df82e2e9-03b4-4aaf-97b1-b2d7cfdbcd29",
+          "name": "Restore Original Bus Assignment (Cleanup)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Conductor restored to original seeded bus', function () {",
+                  "    pm.expect(pm.response.json().data.busId).to.eql(pm.collectionVariables.get('busId'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminAccessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"busId\": \"{{busId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/conductors/{{conductorId}}/assign-bus",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "conductors",
+                "{{conductorId}}",
+                "assign-bus"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Analytics",
+      "item": [
+        {
+          "id": "92883aa6-0efa-4b28-8987-d0d4f47f7185",
+          "name": "Revenue By Route",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response data is an array', function () {",
+                  "    pm.expect(pm.response.json().data).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/analytics/revenue-by-route",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "analytics",
+                "revenue-by-route"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "id": "e641a6c5-3d6a-4a1f-99ec-aa9b1fac9de0",
+          "name": "Tickets Per Day",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response data is an array', function () {",
+                  "    pm.expect(pm.response.json().data).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/analytics/tickets-per-day",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "analytics",
+                "tickets-per-day"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "id": "b994e089-6eb1-45a4-9a3b-efe507e5d1b8",
+          "name": "Top Routes",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response data is an array', function () {",
+                  "    pm.expect(pm.response.json().data).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/analytics/top-routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "analytics",
+                "top-routes"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "id": "4066e485-52a3-484a-ad49-76e62375a82c",
+          "name": "Conductor Activity",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response data is an array', function () {",
+                  "    pm.expect(pm.response.json().data).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/analytics/conductor-activity",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "analytics",
+                "conductor-activity"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "id": "9eb57adf-be89-4343-af5a-f2fe4de6ddd0",
+          "name": "Revenue By Route (Conductor Token - expect 403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Returns 403', function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{conductorAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/analytics/revenue-by-route",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "analytics",
+                "revenue-by-route"
               ]
             }
           },

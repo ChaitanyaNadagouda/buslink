@@ -40,6 +40,7 @@ A monolith is the deliberate starting point, not an oversight: microservices sol
 | Testing | JUnit, Mockito |
 | Local infra | Docker, Docker Compose |
 | Payment gateway | Razorpay (test mode), abstracted behind `PaymentGatewayPort` |
+| Cache | Redis (`redis:7-alpine`), via Spring's cache abstraction (`@Cacheable`/`@CacheEvict`) — Sprint 6 |
 | Frontend (future) | React |
 
 ### Note on Spring Boot version (2026-07-05)
@@ -94,36 +95,65 @@ Layered architecture is chosen over a more elaborate Clean/Hexagonal Architectur
 
 ---
 
+### Admin authentication (Sprint 6)
+
+`ROLE_ADMIN` finally got a live login path, built the same way as `ROLE_CONDUCTOR` (Sprint 3): a **separate `Admin` entity** (not `User` with a role flag — admin has no wallet, QR token, or `deviceId`, so the field sets don't overlap), a separate `AdminPrincipal`/`AdminDetailsServiceImpl`, and a `"ADMIN"` role claim in the JWT. `JwtAuthenticationFilter` now resolves one of **three** principal types per request off that claim (`PASSENGER` → `UserDetailsServiceImpl`, `CONDUCTOR` → `ConductorDetailsServiceImpl`, `ADMIN` → `AdminDetailsServiceImpl`), each injected as a concrete class to avoid `NoUniqueBeanDefinitionException`. Every pre-existing `/admin/**` endpoint (built in Sprint 3, unreachable until now) works with an admin token; the gap noted at Sprint 3/4/5 close is closed.
+
+### Caching strategy (Sprint 6)
+
+**Problem:** two conductor-facing reads — the full stop list for a route (`GET /routes/{id}/stops`) and the per-stage fare between two stops (`GET /routes/{id}/fare`) — hit Postgres on every call, but the underlying data (route topology, `farePerStage`) changes only on rare admin edits.
+
+**Choice:** Redis behind Spring's cache abstraction (`@Cacheable`/`@CacheEvict`), not hand-rolled caching or a read replica. Spring's abstraction keeps the caching declarative and out of the business logic; Redis (over an in-process cache like Caffeine) because it survives app restarts and is the same cache the future multi-instance deployment will need. A read replica is overkill for two endpoints with a tiny working set.
+
+**Shape:**
+- `route-stops` cache — keyed by `routeId`, holds `List<RouteStopResponseDTO>`. Evicted on `addStop(routeId)` (key-scoped) and `updateRoute` (all entries).
+- `fare-calc` cache — keyed by `routeId + origin + destination`, holds a `FareRateDTO` (the per-stage rate, **no passenger-count-dependent `totalFare`**). `calculateFare` recomputes the total per request from the cached rate, so one entry serves every passenger mix. Evicted on `updateRoute` (all entries — a `farePerStage` change invalidates every stored rate).
+- 1h TTL, JSON values (readable in `redis-cli`, no Java-serialization coupling).
+
+**Two non-obvious implementation points** (full writeup in `docs/sprints/Sprint-06.md`):
+1. `@Cacheable` is Spring-AOP-proxy-based, so a call from *inside* the same bean bypasses it. `calculateFare` calls the cached `getFareRate` via `self` — the bean's own proxy, injected back into `FareServiceImpl` with `@Lazy` to break the self-referential constructor cycle. The alternative (`AopContext.currentProxy()`) needs `exposeProxy = true` and is generally considered the worse smell.
+2. On Boot 4.1 / Jackson 3, a generic JSON serializer deserializes the cached `List<RouteStopResponseDTO>` back to `List<LinkedHashMap>` (erased generic). `RedisConfig` registers a per-cache `JacksonJsonRedisSerializer` built with an explicit `JavaType` for the concrete element type.
+
+Redis is used **as a cache only** — never as a `@RedisHash` repository store. (`spring-boot-starter-data-redis` auto-enables Redis-repository scanning, which logs harmless "could not identify store" noise at startup; candidate fix `spring.data.redis.repositories.enabled=false`, noted not actioned.)
+
+---
+
 ## Current Architecture Diagram
 
 ```
-                        ┌─────────────────────────┐
-                        │        Developer         │
-                        │   (browser / curl /       │
-                        │    pgAdmin UI)            │
-                        └────────────┬──────────────┘
-                                     │
-                     ┌───────────────┴───────────────┐
-                     │                                │
-                     ▼                                ▼
-          ┌───────────────────┐            ┌────────────────────┐
-          │  pgAdmin           │            │  Spring Boot App    │
-          │  (container)       │            │  (not yet built)     │
-          │  localhost:5050    │            │  planned: :8080      │
-          └─────────┬──────────┘            └──────────┬──────────┘
-                     │                                    │
-                     │        buslink_network (Docker)     │
-                     └───────────────┬────────────────────┘
-                                      ▼
-                          ┌────────────────────────┐
-                          │  PostgreSQL             │
-                          │  (container)            │
-                          │  localhost:5432         │
-                          │  volume: postgres_data  │
-                          └────────────────────────┘
+                     ┌─────────────────────────────────────────┐
+                     │   Clients: Postman / curl / Swagger UI    │
+                     │   (passenger, conductor, admin JWTs)      │
+                     └──────────────────┬──────────────────────┘
+                                        │ HTTP :8080
+                                        ▼
+                       ┌──────────────────────────────────┐
+                       │   Spring Boot App  (mvnw run)      │
+                       │   controller → service → repo      │
+                       │   Spring Security + JWT filter     │
+                       │   (3 principal types by role claim)│
+                       └───┬──────────────┬─────────────┬───┘
+             cache (Redis) │              │ JDBC        │ HTTPS (SDK)
+                           ▼              ▼             ▼
+                 ┌──────────────┐ ┌──────────────┐ ┌──────────────────┐
+                 │  Redis        │ │  PostgreSQL   │ │  Razorpay (test) │
+                 │  :6379        │ │  :5432        │ │  + webhooks via  │
+                 │  route-stops, │ │  vol:         │ │  ngrok (dev)     │
+                 │  fare-calc    │ │  postgres_data│ └──────────────────┘
+                 └──────────────┘ └───────┬──────┘
+                                          │
+                                   ┌──────┴──────┐
+                                   │  pgAdmin     │
+                                   │  :5050       │
+                                   └─────────────┘
 ```
 
-Everything above runs locally via Docker Compose. The Spring Boot application box is drawn as "not yet built" because Sprint 1's remaining objective is generating that project and connecting it to Postgres — see `PROJECT_CONTEXT.md` for current status.
+`postgres`, `pgadmin`, and `redis` run locally via Docker Compose (root
+`docker-compose.yml`, `buslink_network`). The Spring Boot app runs on the host
+(`./mvnw spring-boot:run`, env from `infrastructure/.env`) — app containerization
+is deferred (Sprint 8 candidate). Razorpay is an external test-mode service;
+webhook delivery in dev is tunnelled through ngrok (Sprint 5). Flyway is listed
+in Technology Choices but not yet wired — schema is still `ddl-auto=update`.
 
 ---
 
@@ -131,14 +161,14 @@ Everything above runs locally via Docker Compose. The Spring Boot application bo
 
 The following are anticipated additions, roughly in the order the domain requires them. Each will get its own architectural decision (problem → alternatives → chosen approach) when its sprint begins, not designed in detail upfront.
 
-- **Authentication** — Spring Security + JWT for stateless API auth; likely role-based (rider vs. admin) from the start given the Admin Portal below. **Update (2026-07-08):** a second login method — mobile number + OTP — is planned alongside email/password, for riders who prefer it over remembering a password. `User.mobileNo` (Sprint 1, S1-10) was already added unique specifically to support this later. Sprint 2's email/password flow (`UserDetailsServiceImpl.loadUserByUsername(email)`, login/register DTOs) is built as one specific auth method, not the only one the system will ever support — OTP login is a parallel lookup/flow (by `mobileNo` instead of `email`) and a new endpoint/DTO, added in a future sprint once OTP delivery (SMS gateway) is in scope. No Sprint 2 rework anticipated; `JwtUtil` issues tokens off a `User`, independent of how they authenticated. **Update (2026-07-26, Sprint 3):** role-based auth landed — `ROLE_CONDUCTOR` added as a second, fully separate principal/auth path (`ConductorPrincipal`, `ConductorDetailsServiceImpl`, `POST /conductor/auth/login`) alongside `ROLE_PASSENGER`, plus `ROLE_ADMIN` wired into `SecurityConfig`'s rules. `JwtUtil` now embeds a `role` claim so `JwtAuthenticationFilter` can load the correct principal type per request. **`ROLE_ADMIN` has no live login path yet** — `/admin/**` is correctly secured and rejects unauthenticated requests, but nothing can mint an admin JWT (no `Admin` entity/principal). Sprint 3's seed data (`DataSeeder`) bypasses the HTTP/auth layer entirely rather than going through the (currently unreachable) admin API. Real admin auth — same recipe as conductor auth — is future scope, Sprint 4+.
+- **Authentication** — Spring Security + JWT for stateless API auth; likely role-based (rider vs. admin) from the start given the Admin Portal below. **Update (2026-07-08):** a second login method — mobile number + OTP — is planned alongside email/password, for riders who prefer it over remembering a password. `User.mobileNo` (Sprint 1, S1-10) was already added unique specifically to support this later. Sprint 2's email/password flow (`UserDetailsServiceImpl.loadUserByUsername(email)`, login/register DTOs) is built as one specific auth method, not the only one the system will ever support — OTP login is a parallel lookup/flow (by `mobileNo` instead of `email`) and a new endpoint/DTO, added in a future sprint once OTP delivery (SMS gateway) is in scope. No Sprint 2 rework anticipated; `JwtUtil` issues tokens off a `User`, independent of how they authenticated. **Update (2026-07-26, Sprint 3):** role-based auth landed — `ROLE_CONDUCTOR` added as a second, fully separate principal/auth path (`ConductorPrincipal`, `ConductorDetailsServiceImpl`, `POST /conductor/auth/login`) alongside `ROLE_PASSENGER`, plus `ROLE_ADMIN` wired into `SecurityConfig`'s rules. `JwtUtil` now embeds a `role` claim so `JwtAuthenticationFilter` can load the correct principal type per request. **`ROLE_ADMIN` has no live login path yet** — `/admin/**` is correctly secured and rejects unauthenticated requests, but nothing can mint an admin JWT (no `Admin` entity/principal). Sprint 3's seed data (`DataSeeder`) bypasses the HTTP/auth layer entirely rather than going through the (currently unreachable) admin API. Real admin auth — same recipe as conductor auth — is future scope, Sprint 4+. **Update (2026-09-06, Sprint 6):** landed — `Admin` entity + `AdminPrincipal` + `AdminDetailsServiceImpl`, `POST /admin/auth/login` → `ROLE_ADMIN` JWT, seeded `admin@buslink.com`. `JwtAuthenticationFilter` now does a 3-way principal resolution off the role claim. Every `/admin/**` endpoint is reachable with an admin token. `DataSeeder` still seeds bypassing HTTP (it now seeds the admin account too). See the "Admin authentication (Sprint 6)" section above.
 - **Ticketing** — the core domain: routes, trips, fares, ticket issuance and lifecycle (issued → validated → expired). **Update (2026-07-06):** the fare service will need the real stop topology of a route (an ordered sequence of stops, each at a known stage/position) to compute a fare between any two stops a conductor selects. `Route` (Sprint 1, S1-13) deliberately only stores `originStop`/`destinationStop` for now — no stop-sequence modeling exists yet. This is scoped to whenever the Fare Service sprint begins, not designed upfront. **Update (2026-07-26, Sprint 3):** the real stop topology landed — `RouteStop` (ordered `stopSequence` + fare-relevant `stageNumber` per stop), with `Route.originStop`/`destinationStop`/`totalStops` kept as denormalized fields updated wherever a stop is added (`createRoute`, `addStop`), not just read once at creation. `FareServiceImpl.calculateFare` computes `stagesCrossed`/`adultFare`/`childFare`/`totalFare` off this topology. Ticket issuance itself (consuming this fare calculation to actually create a `Ticket`) remains Sprint 4 scope — this sprint only built the fare *engine*, not the issuance flow that will call it. **Update (2026-07-30, Sprint 4):** ticket issuance landed — `POST /tickets/issue` (`ROLE_CONDUCTOR`) reuses `TicketServiceImpl`'s own fare calculation (duplicated from `FareServiceImpl`'s logic rather than calling it directly, since issuance needs the resolved `RouteStop`/`Route` entities mid-flow for its own validation chain, not just a fare number), validates the full conductor→bus→route→stops chain, and creates the `Ticket` in `ISSUED` status — idempotent via a client-supplied `X-Idempotency-Key` header, backed by a new `IdempotencyKey` entity/table (24-hour TTL, configurable via `ticket.idempotency.ttl-hours`). `PUT /tickets/{ticketId}/terminate` lets a conductor void an unpaid ticket (`TicketStatus.TERMINATED`, a new value distinct from `CANCELLED`). The ticket-expiry scheduler (auto-expiring old unpaid tickets) remains Sprint 7 scope — `terminate` is a manual conductor action, not automatic expiry.
 - **Payments** — integration with a payment gateway; will need idempotency handling so a network retry can't double-charge or double-issue a ticket. **Update (2026-07-06):** the `Payment` entity's shape was created early, in Sprint 1 (`docs/sprints/Sprint-01.md`, S1-31), once wallet top-up and direct non-wallet fare payment (UPI/card) both needed representing. Only the persistent shape exists — no gateway integration, webhook handling, or idempotency logic yet; that remains future work as described here. **Update (2026-07-30, Sprint 4):** wallet-based payment landed — `POST /payments/wallet` (`ROLE_PASSENGER`) debits `Wallet.balance` (optimistic-lock-protected via the `@Version` field added in Sprint 1, exercised in practice for the first time this sprint), allows going negative up to a configurable overdraft limit (`wallet.overdraft-limit`, default ₹100), records a `DEBIT` `Transaction`, and moves the `Ticket` to `PAID`. `Payment` (the external-gateway entity) is still untouched — this flow is wallet-only. Gateway integration (UPI/card), wallet recharge, and overdraft recovery-on-recharge all remain Sprint 5 scope. **Update (2026-08-23, Sprint 5):** real gateway integration landed — Razorpay (test mode), abstracted behind a `PaymentGatewayPort` interface (`gateway/` package) so `PaymentServiceImpl`/`WebhookServiceImpl` never depend on the Razorpay SDK directly; `RazorpayGatewayAdapter` (`gateway/impl/`) is the only class in the codebase that does. `POST /payments/recharge/initiate` and `POST /payments/ticket/upi/initiate` (both `ROLE_PASSENGER`) create a Razorpay order and a `PENDING` `Payment` row; the actual money movement only happens once a signed webhook (`POST /webhooks/razorpay`, `permitAll()` — Razorpay itself carries no JWT, security is the gateway port's HMAC signature check instead) confirms success or failure. On recharge success, overdraft is auto-recovered first (an explicit DEBIT `Transaction` reversing the negative balance, then a CREDIT for the full recharge — see `Sprint-05.md`'s "Pre-existing gaps found during plan review" for why both reuse `payment.getPaymentId()` as `referenceId`). On ticket-payment success, the `Ticket` moves straight to `PAID` with no wallet/`Transaction` involvement at all, since the money never touched the wallet.
   **Design lesson worth keeping in mind for any future gateway work:** a payment gateway's idempotency unit is often the individual *attempt*, not the logical *order* — Razorpay retries a declined checkout against the same order, sending a separate webhook per attempt. A live-verification pass in Sprint 5 (S5-21) caught the idempotency guard treating any non-`PENDING` `Payment` status as final, which silently dropped a real success webhook that arrived after an earlier attempt's failure webhook had already marked the row `FAILED`. Fixed by only treating `SUCCESS` as terminal. Full writeup in `Sprint-05.md`/`DEVELOPMENT_LOG.md`.
 - **QR validation** — generating a verifiable QR per ticket and a fast validation endpoint for bus-side scanning; likely the first candidate for extraction into its own service if load/latency demands independent scaling.
-- **Analytics** — reporting on ridership, revenue, and route usage; likely read-heavy and may eventually warrant a read replica or separate reporting store rather than querying the transactional database directly.
+- **Analytics** — reporting on ridership, revenue, and route usage; likely read-heavy and may eventually warrant a read replica or separate reporting store rather than querying the transactional database directly. **Update (2026-09-06, Sprint 6):** a first cut landed — 4 `GET /admin/analytics/*` endpoints (`revenue-by-route`, `tickets-per-day`, `top-routes`, `conductor-activity`) backed by JPQL aggregate `@Query` methods on `TicketRepository` (`Object[]` projections), querying the transactional `ticket` table directly. No pagination, no date filters, N+1 route/conductor-name enrichment in the service layer — all acceptable for an infrequently-hit single-admin endpoint. A separate reporting store / read replica stays on this roadmap for when analytics grows beyond a handful of full-table aggregates.
 - **Notifications** — ticket confirmations, trip reminders; async by nature (likely a message queue rather than synchronous calls from the ticketing flow).
-- **Admin Portal** — internal-facing UI/APIs for managing routes, fares, and viewing analytics; distinct auth/authorization needs from the rider-facing API.
+- **Admin Portal** — internal-facing UI/APIs for managing routes, fares, and viewing analytics; distinct auth/authorization needs from the rider-facing API. **Update (2026-09-06, Sprint 6):** the *API* side is now functional — admin auth + all `/admin/**` route/bus/conductor endpoints + `/admin/analytics`. Passenger management endpoints were explicitly dropped from Sprint 6 as low-value. A UI is still future (bundled with the React frontend).
 - **Future React frontend** — a rider-facing web client built once the API contract is stable enough to build against without constant breakage.
 - **Future deployment architecture** — moving from local Docker Compose to a real deployment target (e.g., a single VM with Compose as a first step, then likely a managed container platform or Kubernetes if/when multiple services exist).
 - **Cloud deployment considerations** — managed Postgres vs. self-hosted, secrets management (replacing local `.env` files with a proper secrets manager), observability (logging/metrics/tracing), and CI/CD for automated build-test-deploy.

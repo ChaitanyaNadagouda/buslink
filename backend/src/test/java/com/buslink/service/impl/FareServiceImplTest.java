@@ -16,11 +16,12 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 @ExtendWith(MockitoExtension.class)
 class FareServiceImplTest {
@@ -31,10 +32,17 @@ class FareServiceImplTest {
     @Mock
     private RouteStopRepository routeStopRepository;
 
-    @InjectMocks
     private FareServiceImpl fareService;
 
     private final UUID routeId = UUID.randomUUID();
+
+    @BeforeEach
+    void setUp() {
+        fareService = new FareServiceImpl(routeRepository, routeStopRepository, null);
+        // Unit test has no Spring proxy/caching in play, so calculateFare's internal
+        // self.getFareRate(...) call just needs to reach this same real instance.
+        ReflectionTestUtils.setField(fareService, "self", fareService);
+    }
 
     private RouteStop stop(int sequence, int stage, String name) {
         return RouteStop.builder()

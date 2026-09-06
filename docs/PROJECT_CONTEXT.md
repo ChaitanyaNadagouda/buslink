@@ -8,18 +8,34 @@ BusLink
 
 ## Current Sprint
 
-Sprint 5
+Sprint 6
 
 ## Current Objective
 
-Sprint 5 is closed. Integrated Razorpay (test mode) via ngrok for real webhook
-delivery: `PaymentGatewayPort`/`RazorpayGatewayAdapter` (gateway abstraction, only
-class touching the Razorpay SDK directly), wallet recharge flow (`POST /payments/
-recharge/initiate` → webhook → credit wallet + overdraft recovery), UPI ticket
-payment flow (`POST /payments/ticket/upi/initiate` → webhook → ticket PAID),
-`WebhookController`/`WebhookServiceImpl` (signature-verified, public endpoint), unit
-tests, and full 23-step Postman + ngrok + Razorpay test-mode live verification (guided
-step-by-step in Postman Desktop, same pattern as Sprint 2/3/4).
+Sprint 6 is closed. Unlocked the admin layer and added analytics + Redis caching:
+`Admin` entity + `AdminPrincipal` + `AdminDetailsServiceImpl` (same recipe as
+conductor auth), `POST /admin/auth/login` issuing a ROLE_ADMIN JWT, a seeded
+`admin@buslink.com` account, and all pre-existing `/admin/**` endpoints (Sprint 3)
+now reachable. Four `/admin/analytics` endpoints (`revenue-by-route`,
+`tickets-per-day`, `top-routes`, `conductor-activity`) backed by JPQL aggregate
+`@Query` methods on `TicketRepository` returning `Object[]` projections, enriched
+with route/conductor names in the service layer. A Redis caching layer
+(`spring-boot-starter-data-redis` + `RedisConfig` `RedisCacheManager`):
+`@Cacheable` on `FareServiceImpl.getStopsForRoute` (`route-stops`) and a new
+`getFareRate` (`fare-calc`), `@CacheEvict` on `RouteServiceImpl.addStop` /
+`updateRoute`. Full Postman + `redis-cli` verification done; all 71 tests pass.
+
+Four plan deviations, all in the Redis layer — see `docs/sprints/Sprint-06.md`'s
+"Deviations from the plan" section: (1) fare caching split into a cached
+`getFareRate`/`FareRateDTO` called via a `@Lazy` self-proxy, because the planned
+`@Cacheable` on `calculateFare` would cache a passenger-count-specific total under
+a count-agnostic key and self-invocation bypasses the proxy; (2) per-cache
+`JacksonJsonRedisSerializer` with explicit `JavaType`s instead of
+`GenericJackson2JsonRedisSerializer`, for typed `List<RouteStopResponseDTO>`
+deserialization under Jackson 3; (3) the `spring.cache.redis.time-to-live`
+property is dead config (custom cache-manager bean wins) — noted, not actioned;
+(4) `spring-boot-starter-data-redis` auto-enabled Redis *repository* scanning
+(startup noise) — noted, not actioned.
 
 ## Completed
 
@@ -62,6 +78,12 @@ step-by-step in Postman Desktop, same pattern as Sprint 2/3/4).
 - ✓ `WebhookController` — public `POST /webhooks/razorpay`, signature-verified inside the handler, not by Spring Security
 - ✓ `RazorpayGatewayAdapterTest` (8), `PaymentServiceImplTest` (6), `WebhookServiceImplTest` (7) — all passing
 - ✓ 23-step Postman + ngrok + Razorpay test-mode live verification — all steps passing, including a real bug found and fixed mid-verification (webhook idempotency guard wrongly treated a `FAILED` payment attempt as terminal, dropping a later real success — see `docs/sprints/Sprint-05.md`)
+- ✓ Admin auth (Sprint 6) — `Admin` entity, `AdminStatus` enum, `AdminRepository`, `AdminPrincipal`, `AdminDetailsServiceImpl`, `JwtUtil.generateAdminAccessToken`/`generateAdminRefreshToken` (role claim `"ADMIN"`), 3-way principal resolution in `JwtAuthenticationFilter`, `POST /admin/auth/login`, `SecurityConfig` permit rule
+- ✓ `DataSeeder` restructured — top-level early-return guard split into a route-scoped `if` block + an independent `if (adminRepository.count() == 0)` admin-seed block (so the admin account seeds on existing dev DBs, not just fresh ones); seeds `admin@buslink.com` / `Admin@1234`
+- ✓ Analytics (Sprint 6) — 4 JPQL aggregate `@Query` methods on `TicketRepository` (`Object[]` projections), `AnalyticsService`/`AnalyticsServiceImpl` (route/conductor-name enrichment, defensive `LocalDate`/`java.sql.Date` handling for `CAST(issuedAt AS date)`), `AnalyticsController` (4 endpoints under `/admin/analytics`, ROLE_ADMIN), 4 response DTOs
+- ✓ Redis caching (Sprint 6) — `redis` service in `docker-compose.yml`, `spring-boot-starter-data-redis`, `RedisConfig` (`RedisCacheManager`, 1h TTL, per-cache typed JSON serializers), `@Cacheable` on `getStopsForRoute`/`getFareRate`, `@CacheEvict` on `addStop`/`updateRoute`, new `FareRateDTO`, `calculateFare` → `self.getFareRate(...)` via `@Lazy` proxy
+- ✓ `AnalyticsServiceImplTest` (5), `JwtUtilTest` admin-token test, `FareServiceImplTest` reworked for `self`-proxy wiring — full suite 71 passing
+- ✓ Postman + `redis-cli` live verification (Sprint 6) — admin login/access-control, all 4 analytics endpoints with enriched data + 403 for non-admin, `route-stops` & `fare-calc` cache hits (readable JSON, TTL, no SQL on 2nd call), `@CacheEvict` on add-stop confirmed
 
 ## Current Architecture
 
@@ -77,13 +99,39 @@ PostgreSQL.
 
 ## Current Infrastructure
 
-Docker Compose.
+Docker Compose — `postgres`, `pgadmin`, and (Sprint 6) `redis` (`redis:7-alpine`,
+`6379:6379`, on `buslink_network`).
 
 ## Next Planned Milestone
 
-Sprint 6 — not yet planned. Likely scope per `ARCHITECTURE.md`'s roadmap: admin
-authentication, admin CRUD, analytics, Redis caching (all explicitly deferred from
-Sprint 5). Awaiting the next sprint plan from Notion.
+Sprint 7 — not yet planned. Likely scope per `ARCHITECTURE.md`'s roadmap:
+offline-first sync, and/or the ticket-expiry scheduler (auto-expiring old unpaid
+tickets — explicitly deferred since Sprint 4). Awaiting the next sprint plan from
+Notion.
+
+**Sprint 6 — closed (2026-09-06).** All Definition of Done items verified and
+checked. `admin` table + seeded `admin@buslink.com` confirmed via `psql` on the
+existing dev DB (the exact case the original `DataSeeder` early-return guard
+would have missed — restructured into two independent `if` blocks); pgAdmin
+visual check deliberately skipped this sprint. `POST /admin/auth/login` returns a
+`"ADMIN"`-role JWT (round-trip test added to `JwtUtilTest`); `GET /admin/routes`
+now 200 with an admin token (was 403-for-everyone before), still 403 for a
+passenger token and 401 with no token. All 4 `/admin/analytics` endpoints return
+correctly enriched data after a seeded PAID ticket (revenue `₹90.00`,
+tickets-per-day `2026-09-06 → 1`, top-routes and conductor-activity both `1`,
+route/conductor names populated), and 403 for a conductor token. Redis: `ping` →
+PONG; `route-stops` and `fare-calc` caches verified live via `redis-cli` (keys
+present, values readable typed JSON, TTL counting down, 2nd call served from
+cache with no SQL); `@CacheEvict` on `addStop` confirmed clearing `route-stops`
+(and correctly leaving `fare-calc` — only `updateRoute` clears both). All 71
+tests pass (66 pre-existing + 5 new `AnalyticsServiceImplTest`;
+`FareServiceImplTest` reworked in place). Four plan deviations, all Redis-layer —
+two design corrections (fare-cache split into cached `getFareRate`/`FareRateDTO`
+reached via a `@Lazy` self-proxy; per-cache typed `JacksonJsonRedisSerializer`
+for Jackson 3) and two noted-not-actioned cleanups (dead
+`spring.cache.redis.time-to-live` property; Redis-repository auto-scan noise) —
+full writeup in `docs/sprints/Sprint-06.md`. `feature/admin-analytics-redis`
+merged into `dev`, build clean.
 
 **Sprint 5 — closed (2026-08-23).** All Definition of Done items verified
 individually and checked: Razorpay SDK/config/gateway abstraction in place,
@@ -172,3 +220,6 @@ with the rest of the auth flow as one coherent unit rather than a stub built twi
 - No wallet-recharge endpoint exists as of Sprint 4 close — `POST /payments/wallet` can only *debit* an existing balance. Sprint 4's own Postman verification had to top up test wallets via direct `psql UPDATE` statements (₹150, then ₹20, then -₹80 for the overdraft tests) since there's no HTTP path to do it. Wallet recharge (and overdraft recovery on recharge) is explicit Sprint 5 scope.
 - **Resolved in Sprint 5:** `POST /payments/recharge/initiate` now lets a passenger top up their wallet via Razorpay, with overdraft auto-recovered on recharge. `psql`-driven balance manipulation is still used to *simulate* a pre-existing overdraft state for testing (Sprint 5's own S5-21 Step 9), since there's no legitimate way to overdraw a wallet outside of real ticket payments — that part of the pattern is inherent to test setup, not a gap.
 - `/admin/**` still has no live authentication path as of Sprint 5 close (same gap noted at Sprint 3/4 close) — real admin auth remains Sprint 6 scope per `ARCHITECTURE.md`.
+- **Resolved in Sprint 6:** `/admin/**` now has a live auth path — `POST /admin/auth/login` mints a `ROLE_ADMIN` JWT off a seeded `Admin` entity, `JwtAuthenticationFilter` resolves the admin principal via `AdminDetailsServiceImpl`, and every pre-existing `/admin/**` endpoint (routes, buses, conductor-assign) is now reachable with an admin token. The gap first noted at Sprint 3 close is closed.
+- **Redis is cache-only** as of Sprint 6 — used purely through Spring's cache abstraction (`@Cacheable`/`@CacheEvict`), never as a `@RedisHash` repository store. Two cleanup items are noted but not actioned (see `Sprint-06.md` deviations 3 & 4): the `spring.cache.redis.time-to-live` property is ignored because a custom `RedisCacheManager` bean is defined, and `spring-boot-starter-data-redis` logs ~12 lines of Redis-repository-scan noise at startup (candidate fix: `spring.data.redis.repositories.enabled=false`).
+- The `NoResourceFoundException` → `500` gap (a mistyped URL matching no controller falls into `GlobalExceptionHandler`'s generic `Exception.class` bucket, same shape as Sprint 5's `MissingRequestHeaderException` bug) was found during Sprint 6 plan/verification but deferred as out of scope — see `Sprint-06.md`. Candidate fix: dedicated `@ExceptionHandler(NoResourceFoundException.class)` → `404`.
