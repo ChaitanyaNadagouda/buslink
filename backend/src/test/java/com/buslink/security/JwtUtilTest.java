@@ -2,13 +2,18 @@ package com.buslink.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
 import com.buslink.entity.Admin;
 import com.buslink.entity.Conductor;
 import com.buslink.entity.User;
 import com.buslink.enums.AdminStatus;
 import com.buslink.enums.ConductorStatus;
+import com.buslink.enums.UserStatus;
+import com.buslink.exception.ValidationException;
 import io.jsonwebtoken.Claims;
 import java.util.Collections;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.core.userdetails.UserDetails;
 
@@ -125,6 +130,64 @@ class JwtUtilTest {
 
         assertThat(jwtUtil.extractRole(adminAccessToken)).isEqualTo("ADMIN");
         assertThat(jwtUtil.extractRole(adminRefreshToken)).isEqualTo("ADMIN");
+    }
+
+    @Test
+    void generatePassengerQrToken_roundTrips_userIdAndDeviceId() {
+        JwtUtil jwtUtil = new JwtUtil(TEST_SECRET, ONE_DAY_MS, ONE_DAY_MS);
+        UUID userId = UUID.randomUUID();
+        User user = User.builder()
+                .userId(userId)
+                .deviceId("device-123")
+                .status(UserStatus.ACTIVE)
+                .build();
+
+        String qrToken = jwtUtil.generatePassengerQrToken(user);
+
+        assertThat(jwtUtil.extractUserIdFromPassengerQr(qrToken)).isEqualTo(userId);
+        assertThat(jwtUtil.extractDeviceIdFromPassengerQr(qrToken)).isEqualTo("device-123");
+        assertThat(jwtUtil.validatePassengerQrToken(qrToken).get("userStatus", String.class))
+                .isEqualTo("ACTIVE");
+        assertThat(jwtUtil.validatePassengerQrToken(qrToken).get("type", String.class))
+                .isEqualTo("PASSENGER_QR");
+    }
+
+    @Test
+    void validatePassengerQrToken_throws_forWrongTokenType() {
+        // Passenger QR expiry is a fixed 24h constant inside JwtUtil (not driven by the
+        // constructor's access/refresh expiry params), so a genuinely expired QR token
+        // can't be produced here the way isTokenValid_returnsFalse_forExpiredToken does
+        // for access tokens — the type-claim check below exercises the same rejection
+        // path (parses fine, fails validatePassengerQrToken's own guard).
+        JwtUtil jwtUtil = new JwtUtil(TEST_SECRET, ONE_DAY_MS, ONE_DAY_MS);
+        User user = User.builder()
+                .userId(UUID.randomUUID())
+                .deviceId("device-123")
+                .status(UserStatus.ACTIVE)
+                .build();
+
+        String accessToken = jwtUtil.generateAccessToken(user);
+
+        assertThatThrownBy(() -> jwtUtil.validatePassengerQrToken(accessToken))
+                .isInstanceOf(ValidationException.class);
+    }
+
+    @Test
+    void validatePassengerQrToken_throws_forTamperedToken() {
+        JwtUtil jwtUtil = new JwtUtil(TEST_SECRET, ONE_DAY_MS, ONE_DAY_MS);
+        User user = User.builder()
+                .userId(UUID.randomUUID())
+                .deviceId("device-123")
+                .status(UserStatus.ACTIVE)
+                .build();
+        String qrToken = jwtUtil.generatePassengerQrToken(user);
+        int tamperIndex = 5;
+        char originalChar = qrToken.charAt(tamperIndex);
+        char tamperedChar = originalChar == 'a' ? 'b' : 'a';
+        String tamperedToken = qrToken.substring(0, tamperIndex) + tamperedChar + qrToken.substring(tamperIndex + 1);
+
+        assertThatThrownBy(() -> jwtUtil.validatePassengerQrToken(tamperedToken))
+                .isInstanceOf(ValidationException.class);
     }
 
     private static UserDetails userDetailsFor(String email) {

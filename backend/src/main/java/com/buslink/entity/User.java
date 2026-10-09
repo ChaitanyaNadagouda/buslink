@@ -44,7 +44,7 @@ public class User extends BaseEntity {
     @Column(nullable = false)
     private String passwordHash;
 
-    @Column(unique = true)
+    @Column(unique = true, columnDefinition = "TEXT")
     private String qrToken;
 
     private String deviceId;
