@@ -216,7 +216,7 @@ endpoint always means "me."
     "email": "rider1@example.com",
     "mobileNo": "9876543210",
     "status": "ACTIVE",
-    "qrToken": "<32-char-hex>",
+    "qrToken": "eyJhbGciOiJIUzI1NiJ9...",
     "createdAt": "2026-07-20T10:15:30Z"
   }
 }
@@ -235,8 +235,19 @@ endpoint always means "me."
 Fetch the authenticated passenger's QR token for boarding validation (conductor
 scans this to identify the account, per the offline-first ticketing design).
 
+**Sprint 7: the QR is a signed JWT** (was a plain 32-char hex UUID). The
+conductor verifies it **offline** with no server call, so it must be
+cryptographically signed. Claims: `userId`, `userStatus`, `deviceId` (omitted
+when the user has none), `type: "PASSENGER_QR"`, `iat`, `exp` (`iat` + 24 h).
+
+**Self-healing:** if the stored token is expired, tampered, missing, or a
+pre-Sprint-7 plain UUID, this endpoint transparently **regenerates and saves**
+a fresh one before returning it. Passengers only open the app at boarding
+time, so freshness can't depend on a manual refresh. Trade-off accepted: this
+GET has a side effect.
+
 **Authentication Requirement**
-Bearer JWT (access token).
+Bearer JWT (access token), `ROLE_PASSENGER`.
 
 **Request**
 No body. `Authorization: Bearer <accessToken>` header only.
@@ -246,7 +257,7 @@ No body. `Authorization: Bearer <accessToken>` header only.
 {
   "success": true,
   "message": "Success",
-  "data": "a1b2c3d4e5f6..."
+  "data": "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VySWQiOiJjZjVk..."
 }
 ```
 Bare string, not an object — matches the plain-DTO-return precedent from
@@ -256,6 +267,29 @@ Bare string, not an object — matches the plain-DTO-return precedent from
 | Status | Condition |
 |---|---|
 | 401 | Missing/invalid/expired Bearer token |
+
+---
+
+### POST /user/qr/refresh
+
+**Purpose**
+Force-issue a fresh passenger QR JWT (new `iat`, new 24 h `exp`) and save it,
+regardless of whether the current one is still valid. Added in Sprint 7 as an
+explicit path (e.g. future lost-device scenarios); everyday freshness is
+handled by `GET /user/qr`'s self-heal.
+
+**Authentication Requirement**
+Bearer JWT, `ROLE_PASSENGER`.
+
+**Request**
+No body.
+
+**Response** — `200 OK`: same shape as `GET /user/qr` (`data` is the new JWT string).
+
+**Error Codes**
+| Status | Condition |
+|---|---|
+| 401 / 403 | No token / wrong role |
 
 ## Conductor Auth
 
@@ -657,6 +691,7 @@ No pagination or date-range filters yet — the whole aggregate is returned.
 | `GET /admin/analytics/tickets-per-day` | `TicketsPerDayDTO[]` | `{ date, ticketCount }` — `COUNT` grouped by `CAST(issuedAt AS date)`, all statuses |
 | `GET /admin/analytics/top-routes` | `TopRouteDTO[]` | `{ routeId, routeName, ticketCount }` — `COUNT` of all tickets per route |
 | `GET /admin/analytics/conductor-activity` | `ConductorActivityDTO[]` | `{ conductorId, conductorName, ticketsIssued }` — `COUNT` of tickets per conductor |
+| `GET /admin/analytics/disputed-tickets` *(Sprint 7)* | `DisputedTicketDTO[]` | `{ ticketId, passengerName, conductorName, routeName, originStop, destinationStop, totalFare, issuedAt }`: every ticket currently `DISPUTED` (offline ride the wallet couldn't cover). A ticket drops off the list once the passenger self-pays it via `POST /payments/wallet`. |
 
 **Example** — `GET /admin/analytics/revenue-by-route`, `200 OK`:
 ```json
@@ -725,6 +760,7 @@ bus-mounted app).
   "data": {
     "ticketId": "<uuid>",
     "userId": "<uuid>",
+    "conductorId": "<uuid>",
     "originStop": "HSR Layout",
     "destinationStop": "KR Puram Railway Station",
     "stagesCrossed": 6,
@@ -739,6 +775,11 @@ bus-mounted app).
   }
 }
 ```
+`conductorId` was added in Sprint 7 (S7-04). The conductor app encodes the ticket
+QR straight from these fields (`ticketId`, `originStop`, `destinationStop`,
+`totalFare`, `conductorId`, `issuedAt`, plus a client-side `exp = issuedAt + 1hr`)
+with no renaming.
+
 Duplicate request with the same `X-Idempotency-Key` (within its 24-hour TTL,
 `ticket.idempotency.ttl-hours`) returns this exact same body, `ticketId` included,
 without creating a second ticket. An expired key is treated as a brand-new request.
@@ -796,7 +837,9 @@ now)`), not stored — always reflects "right now," not the time of ticket creat
 **Purpose**
 Lets a conductor void a ticket they issued that never gets paid (e.g. the passenger
 gets off before paying) — removes it from the pending queue immediately, without
-waiting on the ticket-expiry scheduler (Sprint 7 scope, not built yet).
+waiting on the ticket-expiry scheduler (built in Sprint 7: it marks unpaid
+`ISSUED` tickets older than `ticket.expiry.threshold-hours` (24 h) as `EXPIRED`,
+checking every `ticket.expiry.check-interval-ms` (1 h)).
 
 **Authentication Requirement**
 Bearer JWT, `ROLE_CONDUCTOR`. Ownership is enforced implicitly by the lookup itself —
@@ -816,12 +859,69 @@ No body. `ticketId` in the path.
 | 404 | `ticketId` doesn't exist, or doesn't belong to this conductor |
 | 401 / 403 | No token / wrong role |
 
+---
+
+### POST /tickets/scan
+
+**Purpose**
+Added in Sprint 7. The **online** confirm step: the conductor shows the ticket
+QR, the passenger's app scans it and calls this endpoint to get the details
+for the **[Confirm & Pay]** screen. Scanning does **not** pay; payment is
+`POST /payments/wallet`. (Offline, the passenger app reads the QR payload
+locally and this endpoint isn't called.)
+
+The ticket QR itself is plain JSON built by the conductor app from the
+`POST /tickets/issue` response (`ticketId`, `originStop`, `destinationStop`,
+`totalFare`, `conductorId`, `issuedAt`, plus a client-side `exp = issuedAt +
+1h`). It is not signed: the server never trusts its contents, since it looks
+the ticket up here and recalculates fares at sync time.
+
+**Authentication Requirement**
+Bearer JWT, `ROLE_PASSENGER`.
+
+**Request**
+```json
+{ "ticketId": "<uuid>" }
+```
+
+**Response** — `200 OK`
+```json
+{
+  "success": true,
+  "message": "Success",
+  "data": {
+    "ticketId": "<uuid>",
+    "conductorName": "Test Conductor",
+    "busNumber": "KA-01-F-1234",
+    "routeNumber": "500K",
+    "originStop": "HSR Layout",
+    "destinationStop": "KR Puram Railway Station",
+    "stagesCrossed": 6,
+    "adults": 2, "children": 1, "infants": 1,
+    "adultFare": 36.00, "childFare": 18.00, "totalFare": 90.00,
+    "status": "ISSUED",
+    "issuedAt": "2026-10-14T12:18:20.149518Z",
+    "paidAt": null
+  }
+}
+```
+
+**Error Codes**
+| Status | Condition |
+|---|---|
+| 400 | `@Valid` failure, OR ticket isn't awaiting payment (not `ISSUED` or `DISPUTED`) |
+| 404 | `ticketId` doesn't exist **or belongs to another passenger**. Deliberately the same 404: the lookup is by ticket **and** owner together, so a guessed ID never reveals that a ticket exists |
+| 401 / 403 | No token / wrong role |
+
 ## Payments
 
 ### POST /payments/wallet
 
 **Purpose**
-Passenger pays for an `ISSUED` ticket out of their wallet balance, with overdraft
+Passenger pays for an `ISSUED` **or `DISPUTED`** ticket out of their wallet balance
+(Sprint 7: a `DISPUTED` ticket, from an offline sync the wallet couldn't cover,
+is settled by the passenger here, the **[Pay Now]** button in ticket history;
+no admin step), with overdraft
 support up to a configurable limit (`wallet.overdraft-limit`, default ₹100) — moves the
 ticket to `PAID` and records a `DEBIT` `Transaction`. Optimistic locking (`Wallet.
 version`) protects against a concurrent double-payment attempt on the same wallet.
@@ -858,7 +958,7 @@ client-supplied either; the service computes it from `ticket.totalFare`.
 **Error Codes**
 | Status | Condition |
 |---|---|
-| 400 | `@Valid` failure, OR ticket isn't `ISSUED` ("Ticket is not awaiting payment" — covers already-`PAID`/`TERMINATED`/`EXPIRED`), OR wallet isn't `ACTIVE`, OR `balance + overdraftLimit < totalFare` ("Insufficient balance. Available: ₹X, Required: ₹Y") |
+| 400 | `@Valid` failure, OR ticket isn't `ISSUED`/`DISPUTED` ("Ticket is not awaiting payment" — covers already-`PAID`/`TERMINATED`/`EXPIRED`), OR wallet isn't `ACTIVE`, OR `balance + overdraftLimit < totalFare` ("Insufficient balance. Available: ₹X, Required: ₹Y") |
 | 404 | `ticketId` doesn't exist, or doesn't belong to this passenger |
 | 409 | Concurrent update to the same wallet detected (optimistic lock failure) — generic "This record was updated by another request. Please retry." |
 | 401 / 403 | No token / wrong role |
@@ -1195,9 +1295,165 @@ stays a generic UUID rather than being named `ticketId`.
 |---|---|
 | 401 / 403 | No token / wrong role |
 
+## Offline Sync
+
+Added in Sprint 7. The conductor's phone sells tickets **offline** and stores
+each sale as an **event** with a client-generated `eventId` (UUID). When the
+network returns, it uploads them in a batch and the server settles each one
+against the passenger's wallet.
+
+**Per-event outcomes** (`SyncEventResultDTO.status`):
+
+| Status | Meaning | Final? | Client should |
+|---|---|---|---|
+| `SYNCED` | Ticket created `PAID`, wallet charged (overdraft up to ₹100 allowed) | ✅ final | mark done |
+| `DISPUTED` | Wallet + overdraft couldn't cover the fare: ticket created `DISPUTED`, **wallet untouched**. Passenger self-pays later via `POST /payments/wallet` | ✅ final | mark done |
+| `REJECTED` | The event's **data** is invalid (too old, future-dated, wrong conductor/bus/route, invalid passenger QR, passenger inactive, invalid stop/direction). Retrying can't change it | ✅ final | **stop sending it** |
+| `FAILED` | **Technical** error (e.g. DB unavailable, a concurrent duplicate). The server's retry job retries it (every 5 min, up to `sync.max-retry-attempts` = 10) | ❌ retryable | **keep it and re-upload later** |
+
+**Guarantees:**
+- **Idempotent by `eventId`:** re-uploading an event that's already final
+  returns the stored result (same `ticketId`) and creates nothing new.
+- **Concurrency-safe:** the event row is read with `SELECT … FOR UPDATE`, and
+  a brand-new event is claimed with a real INSERT, so two simultaneous uploads
+  of the same event can't create two tickets or charge twice. See
+  `docs/SYNC_RACE_CONDITIONS.md`.
+- **Per-event isolation:** each event is its own transaction. One event's
+  failure never affects the others in the batch.
+- **Fare is always recalculated server-side.** `clientFare` is stored for
+  analytics only. Offline events are **one adult** (stagesCrossed ×
+  farePerStage).
+- **Passenger QR is checked as of boarding time** (`issuedAt`, with a 5-min
+  clock tolerance), not upload time, so a late sync of a QR that was valid at
+  boarding still succeeds.
+- The ticket's `issuedAt` is the event's boarding time; `paidAt` is when the
+  sync settled it.
+
+---
+
+### POST /sync/upload
+
+**Purpose**
+Upload a batch of offline ticket events for settlement.
+
+**Authentication Requirement**
+Bearer JWT, `ROLE_CONDUCTOR`. The conductor is taken from the token; each
+event's `conductorId` must match it.
+
+**Request**
+```json
+{
+  "events": [
+    {
+      "eventId": "<client-generated uuid>",
+      "conductorId": "<uuid>",
+      "userId": "<uuid>",
+      "passengerQrToken": "eyJhbGciOiJIUzI1NiJ9...",
+      "busId": "<uuid>",
+      "routeId": "<uuid>",
+      "originStop": "HSR Layout",
+      "destinationStop": "KR Puram Railway Station",
+      "issuedAt": "2026-10-14T12:15:37.348Z",
+      "clientFare": 36.00
+    }
+  ]
+}
+```
+
+**Validation Rules**
+- `events` — required, non-empty; each event validated (`@Valid` on the list)
+- `eventId`, `conductorId`, `userId`, `busId`, `routeId`, `issuedAt` — required
+- `passengerQrToken`, `originStop`, `destinationStop` — required, non-blank
+- `clientFare` — optional, never used for charging
+
+**Business rules per event** (failing any → `REJECTED` with the reason):
+`conductorId` matches the token ("Conductor mismatch") · `issuedAt` not older
+than `sync.max-sync-age-days` (7) ("Event too old — possible replay or clock
+manipulation") · `issuedAt` not more than `sync.clock-skew-tolerance-minutes`
+(5) in the future ("Event issued in the future — device clock is wrong") ·
+the conductor's bus is `busId` ("Bus mismatch") · that bus runs `routeId`
+("Route mismatch") · passenger QR signature/type valid **at `issuedAt`** and
+its `userId` matches the event ("Invalid QR token") · passenger `ACTIVE`
+("Passenger inactive") · both stops on the route ("Invalid stop") and in
+order ("Invalid direction").
+
+**Response** — `200 OK` (even when some or all events aren't `SYNCED`; check
+the per-event results)
+```json
+{
+  "success": true,
+  "message": "Success",
+  "data": {
+    "totalEvents": 3,
+    "synced": 1,
+    "failed": 0,
+    "disputed": 0,
+    "rejected": 2,
+    "results": [
+      { "eventId": "<uuid>", "status": "SYNCED",   "ticketId": "<uuid>", "message": "Ticket issued and paid" },
+      { "eventId": "<uuid>", "status": "REJECTED", "ticketId": null,     "message": "Invalid QR token" },
+      { "eventId": "<uuid>", "status": "REJECTED", "ticketId": null,     "message": "Bus mismatch" }
+    ]
+  }
+}
+```
+Other per-event messages: `DISPUTED` → "Wallet insufficient — ticket disputed";
+`FAILED` from a commit-time conflict → "Could not be processed — please
+re-upload" (internal error details are never returned to the client).
+
+**Error Codes**
+| Status | Condition |
+|---|---|
+| 400 | `@Valid` failure on the batch or any event (empty list, missing required field) |
+| 401 / 403 | No token / wrong role |
+
+---
+
+### GET /sync/status
+
+**Purpose**
+Counts of this conductor's sync events per status, e.g. for a "sync health"
+badge in the conductor app.
+
+**Authentication Requirement**
+Bearer JWT, `ROLE_CONDUCTOR`. Counts are scoped to the token's conductor.
+
+**Request**
+No body.
+
+**Response** — `200 OK`
+```json
+{
+  "success": true,
+  "message": "Success",
+  "data": {
+    "conductorId": "<uuid>",
+    "pending": 0,
+    "processing": 0,
+    "synced": 3,
+    "failed": 0,
+    "disputed": 1,
+    "rejected": 3
+  }
+}
+```
+Every status is always present (zero-filled). `pending` and `processing` are
+internal in-flight states and are effectively always `0`: `PROCESSING` is set
+and replaced inside one transaction, so it's never visible outside it.
+
+**Error Codes**
+| Status | Condition |
+|---|---|
+| 401 / 403 | No token / wrong role |
+
 ## QR Validation
 
-_No endpoints yet._
+No standalone validation endpoint. Sprint 7 covers QR handling through:
+- **Passenger QR** (signed JWT, verified offline by the conductor app):
+  `GET /user/qr` (self-healing), `POST /user/qr/refresh`; re-verified
+  server-side at sync time as of the boarding time (`POST /sync/upload`).
+- **Ticket QR** (plain JSON from the conductor app): `POST /tickets/scan` for
+  the online confirm screen.
 
 ## Admin APIs
 
@@ -1210,7 +1466,8 @@ Every `/admin/**` endpoint requires `ROLE_ADMIN`. Obtain a token from **Admin Au
   `PUT /admin/routes/{routeId}/status`, `POST/GET /admin/routes/{routeId}/stops`
 - **Buses** — `POST/GET /admin/buses`, `GET /admin/buses/{busId}`,
   `PUT /admin/conductors/{conductorId}/assign-bus`
-- **Analytics** — `GET /admin/analytics/{revenue-by-route,tickets-per-day,top-routes,conductor-activity}`
+- **Analytics** — `GET /admin/analytics/{revenue-by-route,tickets-per-day,top-routes,conductor-activity,disputed-tickets}`
+  (`disputed-tickets` added in Sprint 7)
 
 Each is documented under its own resource section above rather than duplicated here.
 As of Sprint 6 they are all reachable (before Sprint 6, no admin login path existed).

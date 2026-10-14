@@ -14,7 +14,6 @@ import com.buslink.repository.UserRepository;
 import com.buslink.repository.WalletRepository;
 import com.buslink.security.JwtUtil;
 import com.buslink.service.AuthService;
-import com.buslink.util.QrTokenUtil;
 import java.math.BigDecimal;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -42,9 +41,11 @@ public class AuthServiceImpl implements AuthService {
                 .email(request.email())
                 .mobileNo(request.mobileNo())
                 .passwordHash(passwordEncoder.encode(request.password()))
-                .qrToken(QrTokenUtil.generateQrToken())
                 .status(UserStatus.ACTIVE)
                 .build();
+        user = userRepository.save(user);
+
+        user.setQrToken(jwtUtil.generatePassengerQrToken(user));
         user = userRepository.save(user);
 
         Wallet wallet = Wallet.builder()

@@ -154,6 +154,33 @@ class WalletServiceImplTest {
     }
 
     @Test
+    void payViaWallet_disputedTicket_success() {
+        Ticket disputedTicket = Ticket.builder()
+                .ticketId(ticketId)
+                .userId(userId)
+                .status(TicketStatus.DISPUTED)
+                .totalFare(new BigDecimal("36.00"))
+                .build();
+        Wallet wallet = Wallet.builder()
+                .userId(userId)
+                .balance(new BigDecimal("50.00"))
+                .status(WalletStatus.ACTIVE)
+                .build();
+
+        when(ticketRepository.findByTicketIdAndUserId(ticketId, userId)).thenReturn(Optional.of(disputedTicket));
+        when(walletRepository.findByUserId(userId)).thenReturn(Optional.of(wallet));
+        when(walletProperties.overdraftLimit()).thenReturn(new BigDecimal("100.00"));
+        when(walletRepository.save(wallet)).thenReturn(wallet);
+        when(ticketRepository.save(disputedTicket)).thenReturn(disputedTicket);
+
+        WalletPaymentResponseDTO response = walletService.payViaWallet(request, userId);
+
+        assertThat(response.ticketStatus()).isEqualTo(TicketStatus.PAID);
+        assertThat(response.walletBalanceAfter()).isEqualByComparingTo("14.00");
+        assertThat(disputedTicket.getPaidAt()).isNotNull();
+    }
+
+    @Test
     void payViaWallet_ticketAlreadyPaid() {
         Ticket paidTicket = Ticket.builder()
                 .ticketId(ticketId)

@@ -42,10 +42,14 @@ public class SecurityConfig {
                         .hasRole("CONDUCTOR")
                         .requestMatchers("/conductor/**")
                         .hasRole("CONDUCTOR")
+                        .requestMatchers("/sync/**")
+                        .hasRole("CONDUCTOR")
                         .requestMatchers(HttpMethod.POST, "/tickets/issue")
                         .hasRole("CONDUCTOR")
                         .requestMatchers(HttpMethod.PUT, "/tickets/*/terminate")
                         .hasRole("CONDUCTOR")
+                        .requestMatchers(HttpMethod.POST, "/tickets/scan")
+                        .hasRole("PASSENGER")
                         .requestMatchers(
                                 HttpMethod.POST,
                                 "/payments/wallet",
@@ -53,6 +57,8 @@ public class SecurityConfig {
                                 "/payments/ticket/upi/initiate")
                         .hasRole("PASSENGER")
                         .requestMatchers(HttpMethod.GET, "/passenger/**")
+                        .hasRole("PASSENGER")
+                        .requestMatchers(HttpMethod.POST, "/user/qr/refresh")
                         .hasRole("PASSENGER")
                         .anyRequest()
                         .authenticated())

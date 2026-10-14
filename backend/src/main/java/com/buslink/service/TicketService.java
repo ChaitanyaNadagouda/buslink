@@ -1,6 +1,7 @@
 package com.buslink.service;
 
 import com.buslink.dto.request.IssueTicketRequestDTO;
+import com.buslink.dto.request.ScanTicketRequestDTO;
 import com.buslink.dto.response.IssueTicketResponseDTO;
 import com.buslink.dto.response.PendingTicketResponseDTO;
 import com.buslink.dto.response.TicketDetailResponseDTO;
@@ -18,4 +19,6 @@ public interface TicketService {
     List<TicketDetailResponseDTO> getPassengerTickets(UUID userId);
 
     TicketDetailResponseDTO getTicketById(UUID ticketId, UUID userId);
+
+    TicketDetailResponseDTO scanTicket(ScanTicketRequestDTO request, UUID userId);
 }

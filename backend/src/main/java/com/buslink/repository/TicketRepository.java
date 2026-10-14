@@ -2,6 +2,7 @@ package com.buslink.repository;
 
 import com.buslink.entity.Ticket;
 import com.buslink.enums.TicketStatus;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -19,6 +20,11 @@ public interface TicketRepository extends JpaRepository<Ticket, UUID> {
     Optional<Ticket> findByTicketIdAndConductorId(UUID ticketId, UUID conductorId);
 
     Optional<Ticket> findByTicketIdAndUserId(UUID ticketId, UUID userId);
+
+    /** Ticket expiry scheduler — all unpaid tickets older than the configured threshold. */
+    List<Ticket> findByStatusAndIssuedAtBefore(TicketStatus status, Instant issuedAtBefore);
+
+    List<Ticket> findByStatus(TicketStatus status);
 
     @Query("SELECT t.routeId, SUM(t.totalFare) FROM Ticket t "
             + "WHERE t.status = 'PAID' GROUP BY t.routeId "

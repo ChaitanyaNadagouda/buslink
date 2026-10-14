@@ -1,6 +1,7 @@
 package com.buslink.service;
 
 import com.buslink.dto.response.ConductorActivityDTO;
+import com.buslink.dto.response.DisputedTicketDTO;
 import com.buslink.dto.response.RevenueByRouteDTO;
 import com.buslink.dto.response.TicketsPerDayDTO;
 import com.buslink.dto.response.TopRouteDTO;
@@ -15,4 +16,6 @@ public interface AnalyticsService {
     List<TopRouteDTO> getTopRoutes();
 
     List<ConductorActivityDTO> getConductorActivity();
+
+    List<DisputedTicketDTO> getDisputedTickets();
 }

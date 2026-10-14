@@ -1,15 +1,20 @@
 package com.buslink.service.impl;
 
 import com.buslink.dto.response.ConductorActivityDTO;
+import com.buslink.dto.response.DisputedTicketDTO;
 import com.buslink.dto.response.RevenueByRouteDTO;
 import com.buslink.dto.response.TicketsPerDayDTO;
 import com.buslink.dto.response.TopRouteDTO;
 import com.buslink.entity.Conductor;
 import com.buslink.entity.Route;
+import com.buslink.entity.Ticket;
+import com.buslink.entity.User;
+import com.buslink.enums.TicketStatus;
 import com.buslink.exception.ResourceNotFoundException;
 import com.buslink.repository.ConductorRepository;
 import com.buslink.repository.RouteRepository;
 import com.buslink.repository.TicketRepository;
+import com.buslink.repository.UserRepository;
 import com.buslink.service.AnalyticsService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -25,6 +30,7 @@ public class AnalyticsServiceImpl implements AnalyticsService {
     private final TicketRepository ticketRepository;
     private final RouteRepository routeRepository;
     private final ConductorRepository conductorRepository;
+    private final UserRepository userRepository;
 
     @Override
     public List<RevenueByRouteDTO> getRevenueByRoute() {
@@ -64,6 +70,32 @@ public class AnalyticsServiceImpl implements AnalyticsService {
                     return new ConductorActivityDTO(conductorId, findConductorName(conductorId), ticketsIssued);
                 })
                 .toList();
+    }
+
+    @Override
+    public List<DisputedTicketDTO> getDisputedTickets() {
+        return ticketRepository.findByStatus(TicketStatus.DISPUTED).stream()
+                .map(this::toDisputedTicketDTO)
+                .toList();
+    }
+
+    private DisputedTicketDTO toDisputedTicketDTO(Ticket ticket) {
+        return new DisputedTicketDTO(
+                ticket.getTicketId(),
+                findPassengerName(ticket.getUserId()),
+                findConductorName(ticket.getConductorId()),
+                findRouteName(ticket.getRouteId()),
+                ticket.getOriginStop(),
+                ticket.getDestinationStop(),
+                ticket.getTotalFare(),
+                ticket.getIssuedAt());
+    }
+
+    private String findPassengerName(UUID userId) {
+        User passenger = userRepository
+                .findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "userId", userId));
+        return passenger.getName();
     }
 
     private String findRouteName(UUID routeId) {

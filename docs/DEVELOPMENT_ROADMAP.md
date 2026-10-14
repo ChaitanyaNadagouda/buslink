@@ -4,23 +4,28 @@
 Backend Foundation
 
 ## Active Sprint
-Sprint 6
+Sprint 7
 
 ## Sprint Status
-✅ Closed (2026-09-06). Admin auth layer live (`Admin` entity/principal/
-`AdminDetailsServiceImpl`, `POST /admin/auth/login` → ROLE_ADMIN JWT, seeded
-`admin@buslink.com`), all pre-existing `/admin/**` endpoints now reachable, 4
-`/admin/analytics` endpoints backed by JPQL aggregate queries, and a Redis
-caching layer (`@Cacheable` on route stops + fare rates, `@CacheEvict` on stop/
-route mutation). All 71 tests pass; full Postman + `redis-cli` verification
-done. Four plan deviations, all in the Redis layer (fare-cache split into a
-cached `getFareRate`/`FareRateDTO`, per-cache typed serializers for Jackson 3,
-plus two noted-not-actioned cleanups) — see `docs/sprints/Sprint-06.md`'s
-"Deviations from the plan" section. `feature/admin-analytics-redis` merged into
-`dev`.
+✅ **Complete (closed 2026-10-14).** All Definition of Done items verified;
+S7-22 Postman run 27/27 + SQL-log proof of the race-condition fix + scheduler
+checks; `feature/offline-sync` merged into `dev`, build clean, 106/106 tests.
+Beyond the plan: concurrency-safe idempotency (row lock + `Persistable`),
+`REJECTED` status + retry cap, QR validated as of boarding time. See
+`docs/sprints/Sprint-07.md`. Next: Sprint 8 plan from Notion.
+
+Original status (2026-09-17): 🚧 In progress. Offline sync engine: passenger QR upgraded
+to a signed JWT (24hr expiry, offline identity verification), ticket QR stays
+an unsigned `ticketId` (`POST /tickets/scan` for online payment), push
+notifications removed entirely in favor of the QR-scan model. Core of the
+sprint is `POST /sync/upload` — idempotent, per-event-`@Transactional` batch
+reconciliation of offline ticket events with three-outcome resolution
+(SYNCED/DISPUTED/FAILED), plus `GET /sync/status` and three schedulers (FAILED
+retry, ticket expiry, idempotency-key cleanup). See
+`docs/sprints/Sprint-07.md` for full scope, task list, and Definition of Done.
 
 ## Active Sprint File
-docs/sprints/Sprint-06.md
+docs/sprints/Sprint-07.md
 
 ---
 

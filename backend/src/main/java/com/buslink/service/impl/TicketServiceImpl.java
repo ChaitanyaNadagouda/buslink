@@ -2,6 +2,7 @@ package com.buslink.service.impl;
 
 import com.buslink.config.TicketProperties;
 import com.buslink.dto.request.IssueTicketRequestDTO;
+import com.buslink.dto.request.ScanTicketRequestDTO;
 import com.buslink.dto.response.IssueTicketResponseDTO;
 import com.buslink.dto.response.PendingTicketResponseDTO;
 import com.buslink.dto.response.TicketDetailResponseDTO;
@@ -173,6 +174,19 @@ public class TicketServiceImpl implements TicketService {
         return toDetailResponseDTO(ticket);
     }
 
+    @Override
+    public TicketDetailResponseDTO scanTicket(ScanTicketRequestDTO request, UUID userId) {
+        Ticket ticket = ticketRepository
+                .findByTicketIdAndUserId(request.ticketId(), userId)
+                .orElseThrow(() -> new ResourceNotFoundException("Ticket", "ticketId", request.ticketId()));
+
+        if (ticket.getStatus() != TicketStatus.ISSUED && ticket.getStatus() != TicketStatus.DISPUTED) {
+            throw new ValidationException("Ticket is not awaiting payment");
+        }
+
+        return toDetailResponseDTO(ticket);
+    }
+
     private RouteStop findStopByName(UUID routeId, String stopName) {
         return routeStopRepository
                 .findByRouteIdAndStopName(routeId, stopName)
@@ -231,6 +245,7 @@ public class TicketServiceImpl implements TicketService {
         return new IssueTicketResponseDTO(
                 ticket.getTicketId(),
                 ticket.getUserId(),
+                ticket.getConductorId(),
                 ticket.getOriginStop(),
                 ticket.getDestinationStop(),
                 ticket.getStagesCrossed(),

@@ -1027,3 +1027,228 @@ the *shared singleton*, not a fresh instance. `@Component` (or
 inter-method calls create new objects. For `RedisConfig` it happens not to
 matter (one bean, no inter-bean calls), but the habit is: `@Configuration`
 for bean-definition classes.
+
+## Sprint 7
+
+Offline sync engine. Deep-dive notes: `docs/SYNC_RACE_CONDITIONS.md` (race
+conditions, with a derive-it-yourself Q&A) and `docs/OFFLINE_SYNC_DEMO_HANDBOOK.md`
+(demo script, design decisions, bug stories).
+
+### Offline-first sync & idempotency
+
+**Q: How do you make an offline sync endpoint safe to retry?**
+A: The **client** generates the ID (`eventId`, a UUID) when the ticket is
+sold offline, so every retry carries the same key. The server keys a
+**permanent** row on it (`sync_event`, never deleted). Before processing it
+checks: already final (SYNCED/DISPUTED/REJECTED)? → return the stored result.
+A re-upload creates nothing and charges nothing. Proven in the S7-22 run:
+same `eventId` twice → same `ticketId`, one DEBIT.
+
+**Q: You already had an `IdempotencyKey` table (24 h TTL). Why not use it?**
+A: The `sync_event` row is already a permanent idempotency record. A TTL key
+would be a **weaker duplicate**: an event re-uploaded after 25 hours would be
+processed again. Use a TTL key when you have nothing durable to key on (like
+ticket issuance); use the business record when you do.
+
+**Q: The client sends a fare. Do you use it?**
+A: Never for charging. The fare is **recalculated server-side** from the
+stops. `clientFare` is stored for analytics only. Rule: never trust money
+values from a client.
+
+**Q: Why return 200 for a batch where some events failed?**
+A: The **request** succeeded; the **items** have individual outcomes, reported
+per event (`results[]` plus counts). Failing the whole HTTP request for one bad
+item would hide the others' results. (Alternative: 207 Multi-Status, the
+WebDAV-style status. It's correct, but less familiar to clients.)
+
+### Error modelling: transient vs permanent
+
+**Q: Why both FAILED and REJECTED?**
+A: They need opposite handling. **Transient** errors (DB hiccup, lock
+conflict) may succeed later → **retry**. **Permanent** errors are about the
+data (too old, wrong bus, fake QR) → the same input gives the same answer, so
+retrying is pointless → **final**. Mixing them made the retry job loop
+forever on "Event too old", which only gets older.
+
+```
+ FAILED   → retry job (every 5 min, max 10 attempts) + client re-upload
+ REJECTED → final; a re-upload returns the stored reason without re-validating
+ DISPUTED → final; a money shortfall doesn't fix itself on a timer → user self-pays
+```
+
+**Q: What's a poison message, and how do you handle it?**
+A: An item that fails **every** time, e.g. one that triggers a code bug.
+Unbounded retries waste work forever and flood the logs. Cap retries
+(`failedAttempts < 10`), then stop and surface it for a human. Message queues
+do the same with a **dead-letter queue (DLQ)**. Here a capped event stays
+FAILED, so the phone can still re-upload it after a fix.
+
+### Concurrency: check-then-act
+
+**Q: Your endpoint is idempotent. What happens if two identical requests
+arrive at the same instant?**
+A: Classic **check-then-act race**: both check "already done?" before either
+saves, both see "no", both act. Idempotency must hold **under concurrency**,
+not just on sequential retries.
+
+```
+ A: check → not done ──► work ──► save
+ B:    check → not done ──► work ──► save     ← A hasn't saved yet → duplicate
+```
+
+**Q: Isn't the wallet's `@Version` (optimistic locking) enough?**
+A: Only partly. (1) It protects only rows you **update**: the DISPUTED path
+never writes the wallet, so two DISPUTED tickets got through. (2) A brand-new
+duplicate that reads the wallet **after** the first commit sees a fresh
+version, so no conflict, and it charges twice. (3) The version error fires at
+**commit**, outside the method's try/catch, so it aborted the whole batch.
+
+**Q: How did you fix it?**
+A: Three parts:
+- **Row exists** → `SELECT … FOR UPDATE` on the lookup
+  (`@Lock(PESSIMISTIC_WRITE)`). The second request **waits**, then reads the
+  committed final status and returns it.
+- **Row missing** (nothing to lock) → force a real **INSERT** so the primary
+  key rejects the duplicate (see `Persistable` below), and `saveAndFlush` so it
+  happens at the **start**, before touching the wallet.
+- A **per-event try/catch in the loop** (outside the transaction) so a
+  commit-time error fails only that event. The loser **saves nothing**: the
+  DB already holds the winner's result, and writing FAILED over it would make
+  the retry job charge again.
+
+**Q: Why not Java `synchronized`?**
+A: Two reasons. (1) It lives in **one JVM's memory**: with two instances
+behind a load balancer, each has its own lock. (2) Even on one instance it
+releases when the method **returns**, but Spring commits **after** that. In
+that gap the second thread reads uncommitted-invisible data and still sees
+"not done". The lock must be in the **shared DB** and held **until commit**.
+
+**Q: Optimistic vs pessimistic locking: when do you use which?**
+
+| | Optimistic (`@Version`) | Pessimistic (`FOR UPDATE`) |
+|---|---|---|
+| How | `UPDATE … WHERE version = ?`, 0 rows → exception | row locked on read until commit |
+| Loser | **fails** (must retry) | **waits**, then sees the result |
+| Best when | conflicts are rare, retry is cheap | conflicts matter, loser should get the right answer |
+| Blind spot | rows you don't update | rows that don't exist yet |
+
+**Q: Postgres logged `FOR NO KEY UPDATE`, not `FOR UPDATE`. Difference?**
+A: Hibernate's `PESSIMISTIC_WRITE` maps to Postgres's lighter `FOR NO KEY
+UPDATE`. It still blocks other writers and `FOR UPDATE`/`FOR NO KEY UPDATE`
+readers of that row, but doesn't block inserts in **other** tables that
+reference it by foreign key (`FOR KEY SHARE`). Same protection for our case,
+less contention.
+
+### Transactions & persistence mechanics
+
+**Q: Why is the per-event transaction in a separate `SyncEventProcessor` bean?**
+A: `@Transactional` is proxy-based. A loop calling `this.processEvent()` in
+the same class would bypass the proxy and get **no** transaction (same lesson
+as Sprint 6's `@Cacheable`). The batch loop is deliberately **not**
+transactional, so each event commits or rolls back on its own.
+
+**Q: Why can't the try/catch inside a `@Transactional` method catch commit errors?**
+A: Hibernate defers SQL to **flush** (usually at commit), and Spring commits
+**after** the method returns. Constraint and version violations surface
+there, in the proxy, and reach the **caller**. Catch them one level up.
+
+```
+ caller ─► [proxy: BEGIN] ─► method body (try/catch here) ─► return ─► [proxy: COMMIT ← error here]
+```
+
+**Q: What does Spring Data `save()` actually do?**
+A: `isNew(entity)` → `em.persist` (plain INSERT), else `em.merge` (SELECT,
+then INSERT or UPDATE). `isNew` = "has a null `@Version`" or "has a null ID".
+With a **client-assigned ID and no `@Version`** it's never null → always
+`merge`. Under concurrency, `merge` can find a row another transaction just
+committed and **overwrite** it, bypassing the primary key. Fix: implement
+`Persistable<ID>` with a transient `isNew` flag (true when built,
+false after `@PostLoad`/`@PrePersist`).
+
+**Q: Two gotchas you hit implementing that flag?**
+A: (1) Lombok `@Builder` **ignores field initialisers**, so `= true` silently
+became `false` without `@Builder.Default`. (2) `@PrePersist`, not
+`@PostPersist`: with an assigned ID Hibernate may delay the INSERT to flush,
+so `@PostPersist` could fire too late for a second save in the same
+transaction.
+
+**Q: What's the gap between `save()` and commit?**
+A: `save()` → change sits in Hibernate's persistence context (Java memory);
+**flush** → SQL sent but uncommitted (invisible to others under READ
+COMMITTED); **commit** → visible. `saveAndFlush` moves step 2 earlier, which
+is why the duplicate INSERT now fails at the start instead of after all the
+work.
+
+### JWT & time
+
+**Q: Why is the passenger QR a signed JWT but the ticket QR plain JSON?**
+A: The passenger QR is an **identity claim** checked **offline**, so it needs
+cryptographic proof. The ticket QR is just a data pipe: the server looks the
+ticket up itself (`/tickets/scan`, owner-scoped) and recalculates fares at
+sync, so forging it gains nothing.
+
+**Q: A QR valid at boarding was rejected when the bus synced a day later. Why?**
+A: The sync path validated `exp` against **now**. The right question is
+"valid **at boarding time**?" Fixed with a jjwt parser whose clock is set to
+the event's `issuedAt`, plus a clock-skew tolerance (5 min) for phone-vs-
+server drift. A separate check rejects boarding times in the future.
+
+**Q: You considered also checking `QR iat ≤ boarding time`. Why drop it?**
+A: Ask "what bad thing does this stop?" A cheater reusing an old QR would pick
+a time **inside** its window, which the lower bound doesn't stop. It would only
+reject honest scans when the conductor's clock runs slightly behind. No
+benefit, real cost → over-engineering.
+
+**Q: The QR is HMAC-signed with the server secret. Problem for offline
+verification?**
+A: Yes, a real one. With **symmetric** HMAC, verifying needs the same secret
+that signs, so any conductor device that can verify could also **forge**
+passenger QRs. For on-device offline verification, use **asymmetric** signing
+(RS256/ES256): the server signs with a private key, devices hold only the
+public key. Today the authoritative check happens server-side at sync (which
+is safe); moving QR signing to an asymmetric key is a known follow-up.
+
+### Scheduling
+
+**Q: `fixedDelay` vs `fixedRate` vs `cron`?**
+A: `fixedDelay`: next run starts N ms **after the previous one finishes**, so
+runs never overlap (used here). `fixedRate`: every N ms from start to start,
+so runs can overlap if one is slow. `cron`: wall-clock schedule ("02:00
+daily"). Without `initialDelay`, `fixedDelay` jobs also run once at startup.
+
+**Q: What breaks with two app instances?**
+A: Each instance runs every `@Scheduled` job independently. Harmless for
+idempotent jobs (expiry, key cleanup), but the retry job would process the
+same FAILED events concurrently. Fix: a distributed lock per job, e.g.
+**ShedLock** (a lock row in the shared DB). Plus making the job idempotent
+anyway, which the row lock now does.
+
+### Schema evolution
+
+**Q: The entity changed, the tests passed, but every insert would have failed. How?**
+A: `ddl-auto=update` **adds** columns but never drops them, relaxes NOT NULL,
+or changes types/constraints, because it can't tell a removal from a rename
+and dropping loses data. Three old `NOT NULL` columns stayed, so every INSERT
+would fail. Mocked tests can't see the real schema. Fixed by hand in one
+transaction, proven with a rolled-back INSERT. Production answer: versioned
+migrations (**Flyway**), where every schema change is a reviewed SQL file.
+
+### API design
+
+**Q: Another passenger scans your ticket ID. 403 or 404?**
+A: **404.** 403 says "this exists, it's just not yours", which leaks existence
+and makes ID-guessing informative. The lookup is by ticket **and** owner
+together (`findByTicketIdAndUserId`), so someone else's ticket is simply "not
+found".
+
+### Testing & verification
+
+**Q: What can't your unit tests prove here, and how did you verify it?**
+A: Mocks can't show real locking, real constraints, commit timing, or the SQL
+Hibernate actually sends. Verified against the live app with SQL logging:
+`select … for no key update` on the lookup, then a plain `insert into
+sync_event` with no merge-SELECT, **before** any validation query. Schedulers
+verified by seeding rows with `psql` and watching their log lines, with the
+intervals shortened via command-line overrides only. A true concurrency test
+would be an integration test with **Testcontainers** firing two threads at
+real Postgres (noted, not built).
