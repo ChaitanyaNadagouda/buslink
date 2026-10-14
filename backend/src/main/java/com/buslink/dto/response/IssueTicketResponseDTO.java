@@ -8,6 +8,7 @@ import java.util.UUID;
 public record IssueTicketResponseDTO(
         UUID ticketId,
         UUID userId,
+        UUID conductorId,
         String originStop,
         String destinationStop,
         Integer stagesCrossed,

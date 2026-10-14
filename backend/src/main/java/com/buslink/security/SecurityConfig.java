@@ -42,6 +42,8 @@ public class SecurityConfig {
                         .hasRole("CONDUCTOR")
                         .requestMatchers("/conductor/**")
                         .hasRole("CONDUCTOR")
+                        .requestMatchers("/sync/**")
+                        .hasRole("CONDUCTOR")
                         .requestMatchers(HttpMethod.POST, "/tickets/issue")
                         .hasRole("CONDUCTOR")
                         .requestMatchers(HttpMethod.PUT, "/tickets/*/terminate")

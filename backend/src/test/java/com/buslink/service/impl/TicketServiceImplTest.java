@@ -113,6 +113,7 @@ class TicketServiceImplTest {
 
         assertThat(response.ticketId()).isEqualTo(ticketId);
         assertThat(response.status()).isEqualTo(TicketStatus.ISSUED);
+        assertThat(response.conductorId()).isEqualTo(conductorId);
         assertThat(response.stagesCrossed()).isEqualTo(3);
         assertThat(response.adultFare()).isEqualByComparingTo("30.00");
         assertThat(response.childFare()).isEqualByComparingTo("15.00");

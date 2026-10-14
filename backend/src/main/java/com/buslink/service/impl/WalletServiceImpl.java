@@ -42,7 +42,9 @@ public class WalletServiceImpl implements WalletService {
                 .findByTicketIdAndUserId(request.ticketId(), userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Ticket", "ticketId", request.ticketId()));
 
-        if (ticket.getStatus() != TicketStatus.ISSUED) {
+        // DISPUTED is also payable — it's the Sprint 7 self-pay path for an offline sync event that
+        // couldn't be covered at sync time (passenger sees it in history, taps [Pay Now], lands here).
+        if (ticket.getStatus() != TicketStatus.ISSUED && ticket.getStatus() != TicketStatus.DISPUTED) {
             throw new ValidationException("Ticket is not awaiting payment");
         }
 

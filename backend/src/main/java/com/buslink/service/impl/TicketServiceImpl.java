@@ -245,6 +245,7 @@ public class TicketServiceImpl implements TicketService {
         return new IssueTicketResponseDTO(
                 ticket.getTicketId(),
                 ticket.getUserId(),
+                ticket.getConductorId(),
                 ticket.getOriginStop(),
                 ticket.getDestinationStop(),
                 ticket.getStagesCrossed(),

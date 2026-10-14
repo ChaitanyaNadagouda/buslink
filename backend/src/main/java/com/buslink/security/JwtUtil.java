@@ -6,9 +6,12 @@ import com.buslink.entity.User;
 import com.buslink.exception.ValidationException;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
+import io.jsonwebtoken.JwtParserBuilder;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
 import java.util.UUID;
@@ -85,14 +88,30 @@ public class JwtUtil {
                 .compact();
     }
 
+    /** Valid right now — for the passenger's own read path (GET /user/qr self-heal). */
     public Claims validatePassengerQrToken(String token) {
+        return parsePassengerQrToken(token, Jwts.parser().verifyWith(signingKey));
+    }
+
+    /**
+     * Valid at {@code at} — for offline sync, where the question is "was the QR valid when the passenger
+     * boarded?", not "is it valid now?". A sync may arrive days later (up to sync.max-sync-age-days), long
+     * after the QR's 24h exp, so checking against now would reject honest offline tickets. Signature and
+     * type are still verified. {@code clockSkew} absorbs small drift between the conductor phone's clock
+     * (which set {@code at}) and the server's (which set exp). See Sprint-07.md carry-over.
+     */
+    public UUID extractUserIdFromPassengerQrAt(String token, Instant at, Duration clockSkew) {
+        Claims claims = parsePassengerQrToken(token, Jwts.parser()
+                .verifyWith(signingKey)
+                .clock(() -> Date.from(at))
+                .clockSkewSeconds(clockSkew.toSeconds()));
+        return UUID.fromString(claims.get(CLAIM_USER_ID, String.class));
+    }
+
+    private Claims parsePassengerQrToken(String token, JwtParserBuilder parserBuilder) {
         Claims claims;
         try {
-            claims = Jwts.parser()
-                    .verifyWith(signingKey)
-                    .build()
-                    .parseSignedClaims(token)
-                    .getPayload();
+            claims = parserBuilder.build().parseSignedClaims(token).getPayload();
         } catch (JwtException | IllegalArgumentException e) {
             throw new ValidationException("Invalid or expired passenger QR token");
         }

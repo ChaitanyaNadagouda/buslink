@@ -12,6 +12,9 @@ import com.buslink.enums.ConductorStatus;
 import com.buslink.enums.UserStatus;
 import com.buslink.exception.ValidationException;
 import io.jsonwebtoken.Claims;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Collections;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -188,6 +191,65 @@ class JwtUtilTest {
 
         assertThatThrownBy(() -> jwtUtil.validatePassengerQrToken(tamperedToken))
                 .isInstanceOf(ValidationException.class);
+    }
+
+    // QR validity is checked at BOARDING time for offline sync, not at sync time. A fresh QR has
+    // exp = now + 24h, so "boarding" instants are expressed relative to now: within the window,
+    // just past exp but inside the skew tolerance, and well past exp.
+
+    @Test
+    void extractUserIdFromPassengerQrAt_acceptsBoardingTimeInsideQrWindow() {
+        JwtUtil jwtUtil = new JwtUtil(TEST_SECRET, ONE_DAY_MS, ONE_DAY_MS);
+        UUID userId = UUID.randomUUID();
+        String qrToken = jwtUtil.generatePassengerQrToken(passengerUser(userId));
+
+        Instant boarding = Instant.now().plus(23, ChronoUnit.HOURS);
+
+        assertThat(jwtUtil.extractUserIdFromPassengerQrAt(qrToken, boarding, Duration.ofMinutes(5)))
+                .isEqualTo(userId);
+    }
+
+    @Test
+    void extractUserIdFromPassengerQrAt_acceptsBoardingJustPastExpWithinClockSkew() {
+        JwtUtil jwtUtil = new JwtUtil(TEST_SECRET, ONE_DAY_MS, ONE_DAY_MS);
+        UUID userId = UUID.randomUUID();
+        String qrToken = jwtUtil.generatePassengerQrToken(passengerUser(userId));
+
+        Instant boarding = Instant.now().plus(24, ChronoUnit.HOURS).plus(2, ChronoUnit.MINUTES);
+
+        assertThat(jwtUtil.extractUserIdFromPassengerQrAt(qrToken, boarding, Duration.ofMinutes(5)))
+                .isEqualTo(userId);
+    }
+
+    @Test
+    void extractUserIdFromPassengerQrAt_rejectsBoardingAfterQrExpired() {
+        JwtUtil jwtUtil = new JwtUtil(TEST_SECRET, ONE_DAY_MS, ONE_DAY_MS);
+        String qrToken = jwtUtil.generatePassengerQrToken(passengerUser(UUID.randomUUID()));
+
+        Instant boarding = Instant.now().plus(25, ChronoUnit.HOURS);
+
+        assertThatThrownBy(() -> jwtUtil.extractUserIdFromPassengerQrAt(qrToken, boarding, Duration.ofMinutes(5)))
+                .isInstanceOf(ValidationException.class);
+    }
+
+    @Test
+    void extractUserIdFromPassengerQrAt_stillRejectsTamperedToken() {
+        JwtUtil jwtUtil = new JwtUtil(TEST_SECRET, ONE_DAY_MS, ONE_DAY_MS);
+        String qrToken = jwtUtil.generatePassengerQrToken(passengerUser(UUID.randomUUID()));
+        char originalChar = qrToken.charAt(5);
+        String tamperedToken = qrToken.substring(0, 5) + (originalChar == 'a' ? 'b' : 'a') + qrToken.substring(6);
+
+        assertThatThrownBy(() -> jwtUtil.extractUserIdFromPassengerQrAt(
+                        tamperedToken, Instant.now(), Duration.ofMinutes(5)))
+                .isInstanceOf(ValidationException.class);
+    }
+
+    private static User passengerUser(UUID userId) {
+        return User.builder()
+                .userId(userId)
+                .deviceId("device-123")
+                .status(UserStatus.ACTIVE)
+                .build();
     }
 
     private static UserDetails userDetailsFor(String email) {
