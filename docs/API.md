@@ -725,6 +725,7 @@ bus-mounted app).
   "data": {
     "ticketId": "<uuid>",
     "userId": "<uuid>",
+    "conductorId": "<uuid>",
     "originStop": "HSR Layout",
     "destinationStop": "KR Puram Railway Station",
     "stagesCrossed": 6,
@@ -739,6 +740,11 @@ bus-mounted app).
   }
 }
 ```
+`conductorId` was added in Sprint 7 (S7-04). The conductor app encodes the ticket
+QR straight from these fields (`ticketId`, `originStop`, `destinationStop`,
+`totalFare`, `conductorId`, `issuedAt`, plus a client-side `exp = issuedAt + 1hr`)
+with no renaming.
+
 Duplicate request with the same `X-Idempotency-Key` (within its 24-hour TTL,
 `ticket.idempotency.ttl-hours`) returns this exact same body, `ticketId` included,
 without creating a second ticket. An expired key is treated as a brand-new request.

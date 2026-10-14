@@ -2,6 +2,7 @@ package com.buslink.controller;
 
 import com.buslink.dto.response.ApiResponse;
 import com.buslink.dto.response.ConductorActivityDTO;
+import com.buslink.dto.response.DisputedTicketDTO;
 import com.buslink.dto.response.RevenueByRouteDTO;
 import com.buslink.dto.response.TicketsPerDayDTO;
 import com.buslink.dto.response.TopRouteDTO;
@@ -40,5 +41,11 @@ public class AnalyticsController {
     public ApiResponse<List<ConductorActivityDTO>> getConductorActivity(
             @AuthenticationPrincipal AdminPrincipal principal) {
         return ApiResponse.success(analyticsService.getConductorActivity());
+    }
+
+    @GetMapping("/disputed-tickets")
+    public ApiResponse<List<DisputedTicketDTO>> getDisputedTickets(
+            @AuthenticationPrincipal AdminPrincipal principal) {
+        return ApiResponse.success(analyticsService.getDisputedTickets());
     }
 }

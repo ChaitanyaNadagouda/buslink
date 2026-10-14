@@ -3,12 +3,18 @@ package com.buslink.security;
 import com.buslink.entity.Admin;
 import com.buslink.entity.Conductor;
 import com.buslink.entity.User;
+import com.buslink.exception.ValidationException;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
+import io.jsonwebtoken.JwtParserBuilder;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Date;
+import java.util.UUID;
 import java.util.function.Function;
 import javax.crypto.SecretKey;
 import org.springframework.beans.factory.annotation.Value;
@@ -20,8 +26,13 @@ public class JwtUtil {
 
     private static final String CLAIM_TYPE = "type";
     private static final String CLAIM_ROLE = "role";
+    private static final String CLAIM_USER_ID = "userId";
+    private static final String CLAIM_USER_STATUS = "userStatus";
+    private static final String CLAIM_DEVICE_ID = "deviceId";
     private static final String TOKEN_TYPE_ACCESS = "access";
     private static final String TOKEN_TYPE_REFRESH = "refresh";
+    private static final String TOKEN_TYPE_PASSENGER_QR = "PASSENGER_QR";
+    private static final long PASSENGER_QR_EXPIRY_HOURS = 24;
     private static final String ROLE_PASSENGER = "PASSENGER";
     private static final String ROLE_CONDUCTOR = "CONDUCTOR";
     private static final String ROLE_ADMIN = "ADMIN";
@@ -61,6 +72,61 @@ public class JwtUtil {
 
     public String generateAdminRefreshToken(Admin admin) {
         return buildToken(admin.getEmail(), refreshTokenExpiryMs, TOKEN_TYPE_REFRESH, ROLE_ADMIN);
+    }
+
+    public String generatePassengerQrToken(User user) {
+        Date now = new Date();
+        Date expiry = Date.from(now.toInstant().plus(PASSENGER_QR_EXPIRY_HOURS, ChronoUnit.HOURS));
+        return Jwts.builder()
+                .claim(CLAIM_USER_ID, user.getUserId().toString())
+                .claim(CLAIM_USER_STATUS, user.getStatus().name())
+                .claim(CLAIM_DEVICE_ID, user.getDeviceId())
+                .claim(CLAIM_TYPE, TOKEN_TYPE_PASSENGER_QR)
+                .issuedAt(now)
+                .expiration(expiry)
+                .signWith(signingKey)
+                .compact();
+    }
+
+    /** Valid right now — for the passenger's own read path (GET /user/qr self-heal). */
+    public Claims validatePassengerQrToken(String token) {
+        return parsePassengerQrToken(token, Jwts.parser().verifyWith(signingKey));
+    }
+
+    /**
+     * Valid at {@code at} — for offline sync, where the question is "was the QR valid when the passenger
+     * boarded?", not "is it valid now?". A sync may arrive days later (up to sync.max-sync-age-days), long
+     * after the QR's 24h exp, so checking against now would reject honest offline tickets. Signature and
+     * type are still verified. {@code clockSkew} absorbs small drift between the conductor phone's clock
+     * (which set {@code at}) and the server's (which set exp). See Sprint-07.md carry-over.
+     */
+    public UUID extractUserIdFromPassengerQrAt(String token, Instant at, Duration clockSkew) {
+        Claims claims = parsePassengerQrToken(token, Jwts.parser()
+                .verifyWith(signingKey)
+                .clock(() -> Date.from(at))
+                .clockSkewSeconds(clockSkew.toSeconds()));
+        return UUID.fromString(claims.get(CLAIM_USER_ID, String.class));
+    }
+
+    private Claims parsePassengerQrToken(String token, JwtParserBuilder parserBuilder) {
+        Claims claims;
+        try {
+            claims = parserBuilder.build().parseSignedClaims(token).getPayload();
+        } catch (JwtException | IllegalArgumentException e) {
+            throw new ValidationException("Invalid or expired passenger QR token");
+        }
+        if (!TOKEN_TYPE_PASSENGER_QR.equals(claims.get(CLAIM_TYPE, String.class))) {
+            throw new ValidationException("Invalid or expired passenger QR token");
+        }
+        return claims;
+    }
+
+    public UUID extractUserIdFromPassengerQr(String token) {
+        return UUID.fromString(validatePassengerQrToken(token).get(CLAIM_USER_ID, String.class));
+    }
+
+    public String extractDeviceIdFromPassengerQr(String token) {
+        return validatePassengerQrToken(token).get(CLAIM_DEVICE_ID, String.class);
     }
 
     public String extractUsername(String token) {

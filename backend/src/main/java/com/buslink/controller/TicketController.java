@@ -1,11 +1,14 @@
 package com.buslink.controller;
 
 import com.buslink.dto.request.IssueTicketRequestDTO;
+import com.buslink.dto.request.ScanTicketRequestDTO;
 import com.buslink.dto.response.ApiResponse;
 import com.buslink.dto.response.IssueTicketResponseDTO;
 import com.buslink.dto.response.PendingTicketResponseDTO;
+import com.buslink.dto.response.TicketDetailResponseDTO;
 import com.buslink.exception.ValidationException;
 import com.buslink.security.ConductorPrincipal;
+import com.buslink.security.UserPrincipal;
 import com.buslink.service.TicketService;
 import jakarta.validation.Valid;
 import java.util.List;
@@ -49,5 +52,11 @@ public class TicketController {
             @PathVariable UUID ticketId, @AuthenticationPrincipal ConductorPrincipal principal) {
         return ApiResponse.success(
                 ticketService.terminateTicket(ticketId, principal.getConductor().getConductorId()));
+    }
+
+    @PostMapping("/tickets/scan")
+    public ApiResponse<TicketDetailResponseDTO> scanTicket(
+            @Valid @RequestBody ScanTicketRequestDTO request, @AuthenticationPrincipal UserPrincipal principal) {
+        return ApiResponse.success(ticketService.scanTicket(request, principal.getUser().getUserId()));
     }
 }

@@ -9,7 +9,9 @@ import static org.mockito.Mockito.when;
 
 import com.buslink.config.TicketProperties;
 import com.buslink.dto.request.IssueTicketRequestDTO;
+import com.buslink.dto.request.ScanTicketRequestDTO;
 import com.buslink.dto.response.IssueTicketResponseDTO;
+import com.buslink.dto.response.TicketDetailResponseDTO;
 import com.buslink.entity.Bus;
 import com.buslink.entity.Conductor;
 import com.buslink.entity.IdempotencyKey;
@@ -111,6 +113,7 @@ class TicketServiceImplTest {
 
         assertThat(response.ticketId()).isEqualTo(ticketId);
         assertThat(response.status()).isEqualTo(TicketStatus.ISSUED);
+        assertThat(response.conductorId()).isEqualTo(conductorId);
         assertThat(response.stagesCrossed()).isEqualTo(3);
         assertThat(response.adultFare()).isEqualByComparingTo("30.00");
         assertThat(response.childFare()).isEqualByComparingTo("15.00");
@@ -224,6 +227,48 @@ class TicketServiceImplTest {
         when(ticketRepository.findByTicketIdAndConductorId(ticketId, conductorId)).thenReturn(Optional.of(ticket));
 
         assertThatThrownBy(() -> ticketService.terminateTicket(ticketId, conductorId))
+                .isInstanceOf(ValidationException.class);
+    }
+
+    @Test
+    void scanTicket_success() {
+        Ticket ticket = Ticket.builder()
+                .ticketId(ticketId)
+                .userId(userId)
+                .conductorId(conductorId)
+                .busId(busId)
+                .routeId(routeId)
+                .status(TicketStatus.ISSUED)
+                .build();
+        when(ticketRepository.findByTicketIdAndUserId(ticketId, userId)).thenReturn(Optional.of(ticket));
+        when(conductorRepository.findById(conductorId)).thenReturn(Optional.of(conductor));
+        when(busRepository.findById(busId)).thenReturn(Optional.of(bus));
+        when(routeRepository.findById(routeId)).thenReturn(Optional.of(route));
+
+        TicketDetailResponseDTO response = ticketService.scanTicket(new ScanTicketRequestDTO(ticketId), userId);
+
+        assertThat(response.ticketId()).isEqualTo(ticketId);
+        assertThat(response.status()).isEqualTo(TicketStatus.ISSUED);
+    }
+
+    @Test
+    void scanTicket_notFoundForPassenger() {
+        when(ticketRepository.findByTicketIdAndUserId(ticketId, userId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> ticketService.scanTicket(new ScanTicketRequestDTO(ticketId), userId))
+                .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void scanTicket_notAwaitingPayment() {
+        Ticket ticket = Ticket.builder()
+                .ticketId(ticketId)
+                .userId(userId)
+                .status(TicketStatus.PAID)
+                .build();
+        when(ticketRepository.findByTicketIdAndUserId(ticketId, userId)).thenReturn(Optional.of(ticket));
+
+        assertThatThrownBy(() -> ticketService.scanTicket(new ScanTicketRequestDTO(ticketId), userId))
                 .isInstanceOf(ValidationException.class);
     }
 }

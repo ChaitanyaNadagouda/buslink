@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "c56b0cb3-6605-4eb7-aadf-b7616de42023",
     "name": "BusLink API",
-    "description": "Sprint 2 \u2014 passenger auth (register/login/refresh) and profile/QR endpoints. Sprint 3 \u2014 conductor auth, route/stop/fare APIs. Import into Postman Desktop. Run Auth > Login at least once to populate {{accessToken}} before hitting User; run Conductor Auth > Login at least once to populate {{conductorAccessToken}} and {{routeId}} before hitting Route/Fare. Sprint 4 \u2014 ticket issuance and wallet payment APIs. Run Conductor Auth > Login and User > QR Token at least once to populate {{routeId}}, {{busId}}, and {{qrToken}} before hitting Ticket/Payment. Sprint 5 \u2014 Razorpay wallet recharge and UPI ticket payment initiation (Payment > Initiate Recharge / Initiate Ticket UPI Payment). These only start the payment \u2014 completing checkout and confirming the resulting webhook happens outside Postman (browser checkout + ngrok); see docs/sprints/Sprint-05.md's S5-21 for the full guided flow.",
+    "description": "Sprint 2 \u2014 passenger auth (register/login/refresh) and profile/QR endpoints. Sprint 3 \u2014 conductor auth, route/stop/fare APIs. Import into Postman Desktop. Run Auth > Login at least once to populate {{accessToken}} before hitting User; run Conductor Auth > Login at least once to populate {{conductorAccessToken}} and {{routeId}} before hitting Route/Fare. Sprint 4 \u2014 ticket issuance and wallet payment APIs. Run Conductor Auth > Login and User > QR Token at least once to populate {{routeId}}, {{busId}}, and {{qrToken}} before hitting Ticket/Payment. Sprint 5 \u2014 Razorpay wallet recharge and UPI ticket payment initiation (Payment > Initiate Recharge / Initiate Ticket UPI Payment). These only start the payment \u2014 completing checkout and confirming the resulting webhook happens outside Postman (browser checkout + ngrok); see docs/sprints/Sprint-05.md's S5-21 for the full guided flow. Sprint 7 \u2014 offline sync engine (POST /sync/upload, GET /sync/status), passenger QR now a signed JWT with self-healing refresh, POST /tickets/scan, and GET /admin/analytics/disputed-tickets. Run Auth > Register (or Login) to populate {{userId}} before hitting the new Sync folder.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -145,6 +145,41 @@
       "key": "nextStopSequence",
       "value": "",
       "type": "string"
+    },
+    {
+      "key": "userId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "accessToken2",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "userId2",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "syncEventId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "syncTicketId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "disputedTicketId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "tooOldIssuedAt",
+      "value": "",
+      "type": "string"
     }
   ],
   "item": [
@@ -177,7 +212,34 @@
               ]
             }
           },
-          "response": []
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.success && body.data) {",
+                  "    if (body.data.accessToken) {",
+                  "        pm.collectionVariables.set('accessToken', body.data.accessToken);",
+                  "    }",
+                  "    if (body.data.userId) {",
+                  "        pm.collectionVariables.set('userId', body.data.userId);",
+                  "    }",
+                  "}",
+                  "",
+                  "pm.test('Register returned 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('userId captured', function () {",
+                  "    pm.expect(pm.collectionVariables.get('userId')).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
         },
         {
           "id": "5d1708bd-df10-4bcb-8411-f54df03564cd",
@@ -191,6 +253,9 @@
                   "const body = pm.response.json();",
                   "if (body.success && body.data && body.data.accessToken) {",
                   "    pm.collectionVariables.set('accessToken', body.data.accessToken);",
+                  "}",
+                  "if (body.success && body.data && body.data.userId) {",
+                  "    pm.collectionVariables.set('userId', body.data.userId);",
                   "}",
                   "",
                   "pm.test('Login returned 200', function () {",
@@ -2078,6 +2143,255 @@
       ]
     },
     {
+      "id": "b4ac0284-9f93-433a-a2c1-3c6f3ecb97b8",
+      "name": "QR Scan",
+      "item": [
+        {
+          "id": "45757d9f-c681-4951-8dd2-26544e0c9365",
+          "name": "Refresh QR Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/user/qr/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "user",
+                "qr",
+                "refresh"
+              ]
+            },
+            "description": "Force-refreshes the passenger QR (S7-03). GET User > QR Token also self-heals on expiry, but this is the explicit force-refresh path."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.success && body.data) {",
+                  "    pm.collectionVariables.set('qrToken', body.data);",
+                  "}",
+                  "",
+                  "pm.test('Refresh returned 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('New qrToken captured', function () {",
+                  "    pm.expect(pm.collectionVariables.get('qrToken')).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "2b3c93ed-2ed8-4c7e-90d5-2bb7c95d97b6",
+          "name": "Register Second Passenger",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Second Rider\",\n  \"email\": \"rider2@example.com\",\n  \"mobileNo\": \"9123456780\",\n  \"password\": \"password123\"\n}"
+            },
+            "description": "A second passenger, needed only for the ownership-mismatch scan test below."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.success && body.data) {",
+                  "    if (body.data.accessToken) {",
+                  "        pm.collectionVariables.set('accessToken2', body.data.accessToken);",
+                  "    }",
+                  "    if (body.data.userId) {",
+                  "        pm.collectionVariables.set('userId2', body.data.userId);",
+                  "    }",
+                  "}",
+                  "",
+                  "pm.test('Register returned 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "10ef81ce-7668-4fb9-a219-c5b619022417",
+          "name": "Scan Ticket (Success)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tickets/scan",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tickets",
+                "scan"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ticketId\": \"{{ticketId}}\"\n}"
+            },
+            "description": "Run after Ticket > Issue Ticket (needs {{ticketId}} still ISSUED \u2014 run this before Payment > Pay Via Wallet pays it off)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Scan returned 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Ticket is awaiting payment', function () {",
+                  "    pm.expect(['ISSUED', 'DISPUTED']).to.include(body.data.status);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "3a8c2fd8-0f79-4b4e-bf4a-00fdee484cba",
+          "name": "Scan Ticket (Not Found - expect 404)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tickets/scan",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tickets",
+                "scan"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ticketId\": \"00000000-0000-0000-0000-000000000000\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Unknown ticketId returns 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "4eb4e505-55d6-4cab-b733-4aeceae27d50",
+          "name": "Scan Ticket (Wrong Passenger - expect 404)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken2}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tickets/scan",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tickets",
+                "scan"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ticketId\": \"{{ticketId}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Another passenger\\'s ticketId returns 404 (userId mismatch)', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "Sprint 7 \u2014 S7A-03/S7-05. Run after Ticket > Issue Ticket so {{ticketId}} is still ISSUED, and before Payment (which pays {{ticketId}} off)."
+    },
+    {
       "name": "Payment",
       "item": [
         {
@@ -2611,6 +2925,572 @@
           ]
         }
       ]
+    },
+    {
+      "id": "77b80a97-60f5-4b71-aabf-425efe84604f",
+      "name": "Sync",
+      "item": [
+        {
+          "id": "1e38e619-fd38-4653-9d58-91a88b74353e",
+          "name": "Get Sync Status (Initial)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{conductorAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/sync/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sync",
+                "status"
+              ]
+            },
+            "description": "On a fresh DB this conductor's counts are all 0. Not hard-asserted ==0 here since re-running this collection against an already-used DB would make that assertion flaky \u2014 eyeball the actual numbers on a fresh run."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Status counts are all numbers', function () {",
+                  "    ['pending','processing','synced','failed','disputed','rejected'].forEach(function (k) {",
+                  "        pm.expect(body.data[k]).to.be.a('number');",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "9be85f41-d61b-406e-a507-ab2eb9383c7a",
+          "name": "Upload Batch (Sufficient Balance - Synced)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{conductorAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/sync/upload",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sync",
+                "upload"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"events\": [\n    {\n      \"eventId\": \"{{syncEventId}}\",\n      \"conductorId\": \"{{conductorId}}\",\n      \"userId\": \"{{userId}}\",\n      \"passengerQrToken\": \"{{qrToken}}\",\n      \"busId\": \"{{busId}}\",\n      \"routeId\": \"{{routeId}}\",\n      \"originStop\": \"HSR Layout\",\n      \"destinationStop\": \"KR Puram Railway Station\",\n      \"issuedAt\": \"{{$isoTimestamp}}\",\n      \"clientFare\": 36.00\n    }\n  ]\n}"
+            },
+            "description": "Run `UPDATE wallet SET balance = 150.00 WHERE user_id = '{{userId}}';` via psql first. Offline sync events are always one adult (no adults/children/infants fields) \u2014 fare is 6 stages \u00d7 \u20b96 = \u20b936, not the \u20b990 the online Issue Ticket request produces with 2 adults + 1 child + 1 infant."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('syncEventId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.success && body.data && body.data.results[0].ticketId) {",
+                  "    pm.collectionVariables.set('syncTicketId', body.data.results[0].ticketId);",
+                  "}",
+                  "",
+                  "pm.test('Returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Event SYNCED', function () {",
+                  "    pm.expect(body.data.synced).to.eql(1);",
+                  "    pm.expect(body.data.results[0].status).to.eql('SYNCED');",
+                  "    pm.expect(body.data.results[0].message).to.eql('Ticket issued and paid');",
+                  "});",
+                  "",
+                  "pm.test('Single-adult offline fare is \u20b936 (6 stages x \u20b96/stage)', function () {",
+                  "    pm.expect(pm.collectionVariables.get('syncTicketId')).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "8888223b-353e-44f0-935b-9f473e9f7f11",
+          "name": "Upload Batch (Duplicate Event - Idempotency Check)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{conductorAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/sync/upload",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sync",
+                "upload"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"events\": [\n    {\n      \"eventId\": \"{{syncEventId}}\",\n      \"conductorId\": \"{{conductorId}}\",\n      \"userId\": \"{{userId}}\",\n      \"passengerQrToken\": \"{{qrToken}}\",\n      \"busId\": \"{{busId}}\",\n      \"routeId\": \"{{routeId}}\",\n      \"originStop\": \"HSR Layout\",\n      \"destinationStop\": \"KR Puram Railway Station\",\n      \"issuedAt\": \"{{$isoTimestamp}}\",\n      \"clientFare\": 36.00\n    }\n  ]\n}"
+            },
+            "description": "Deliberately reuses {{syncEventId}} from the previous request (no prerequest script here) to prove idempotency."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Same eventId returns the same ticketId, not a new one', function () {",
+                  "    pm.expect(body.data.results[0].ticketId).to.eql(pm.collectionVariables.get('syncTicketId'));",
+                  "    pm.expect(body.data.synced).to.eql(1);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "9b9ef406-e33a-451c-b257-78166d4d7645",
+          "name": "Get Sync Status (After Sync)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{conductorAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/sync/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sync",
+                "status"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('synced count increased', function () {",
+                  "    pm.expect(body.data.synced).to.be.at.least(1);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "a85ce947-280c-4c9d-b5e5-1935f6ddc786",
+          "name": "Upload Batch (Overdraft Allowed)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{conductorAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/sync/upload",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sync",
+                "upload"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"events\": [\n    {\n      \"eventId\": \"{{$guid}}\",\n      \"conductorId\": \"{{conductorId}}\",\n      \"userId\": \"{{userId}}\",\n      \"passengerQrToken\": \"{{qrToken}}\",\n      \"busId\": \"{{busId}}\",\n      \"routeId\": \"{{routeId}}\",\n      \"originStop\": \"HSR Layout\",\n      \"destinationStop\": \"KR Puram Railway Station\",\n      \"issuedAt\": \"{{$isoTimestamp}}\",\n      \"clientFare\": 36.00\n    }\n  ]\n}"
+            },
+            "description": "Run `UPDATE wallet SET balance = 20.00 WHERE user_id = '{{userId}}';` via psql first (effective balance 20+100=120 >= 36). Check Passenger > Get Wallet Balance afterward \u2014 expect -16.00."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Overdraft covers the fare \u2014 SYNCED', function () {",
+                  "    pm.expect(body.data.synced).to.eql(1);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "a049c5e4-5834-4c5e-bd48-b90fff5f78eb",
+          "name": "Upload Batch (Exceeds Overdraft - Disputed)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{conductorAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/sync/upload",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sync",
+                "upload"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"events\": [\n    {\n      \"eventId\": \"{{$guid}}\",\n      \"conductorId\": \"{{conductorId}}\",\n      \"userId\": \"{{userId}}\",\n      \"passengerQrToken\": \"{{qrToken}}\",\n      \"busId\": \"{{busId}}\",\n      \"routeId\": \"{{routeId}}\",\n      \"originStop\": \"HSR Layout\",\n      \"destinationStop\": \"KR Puram Railway Station\",\n      \"issuedAt\": \"{{$isoTimestamp}}\",\n      \"clientFare\": 36.00\n    }\n  ]\n}"
+            },
+            "description": "Run `UPDATE wallet SET balance = -80.00 WHERE user_id = '{{userId}}';` via psql first (effective balance -80+100=20 < 36)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.success && body.data && body.data.results[0].ticketId) {",
+                  "    pm.collectionVariables.set('disputedTicketId', body.data.results[0].ticketId);",
+                  "}",
+                  "",
+                  "pm.test('Exceeds overdraft \u2014 DISPUTED, wallet untouched', function () {",
+                  "    pm.expect(body.data.disputed).to.eql(1);",
+                  "    pm.expect(body.data.results[0].message).to.eql('Wallet insufficient \u2014 ticket disputed');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "af3baa46-b0de-4599-bb97-7440989d221a",
+          "name": "Get My Tickets (Disputed Visible)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/passenger/tickets",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "passenger",
+                "tickets"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const disputedTicketId = pm.collectionVariables.get('disputedTicketId');",
+                  "const found = body.data.find(function (t) { return t.ticketId === disputedTicketId; });",
+                  "",
+                  "pm.test('DISPUTED ticket appears in passenger history', function () {",
+                  "    pm.expect(found).to.not.be.undefined;",
+                  "    pm.expect(found.status).to.eql('DISPUTED');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "9355dd71-beff-4aa9-9346-65d13b6cd9b5",
+          "name": "Get Disputed Tickets (Admin Analytics)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/analytics/disputed-tickets",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "analytics",
+                "disputed-tickets"
+              ]
+            },
+            "description": "Run BEFORE 'Pay Disputed Ticket' below \u2014 once self-paid, the ticket flips to PAID and drops out of this list."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const disputedTicketId = pm.collectionVariables.get('disputedTicketId');",
+                  "const found = body.data.find(function (t) { return t.ticketId === disputedTicketId; });",
+                  "",
+                  "pm.test('Returns 200 with an array', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(body.data).to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('Disputed ticket listed with enriched names', function () {",
+                  "    pm.expect(found).to.not.be.undefined;",
+                  "    pm.expect(found.passengerName).to.not.be.empty;",
+                  "    pm.expect(found.conductorName).to.not.be.empty;",
+                  "    pm.expect(found.routeName).to.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "ecc26054-1f88-4c59-9d46-6e24c1372420",
+          "name": "Pay Disputed Ticket Via Wallet (Self-Pay)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payments/wallet",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "wallet"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ticketId\": \"{{disputedTicketId}}\"\n}"
+            },
+            "description": "Top up first: `UPDATE wallet SET balance = 50.00 WHERE user_id = '{{userId}}';` via psql. Expect walletBalanceAfter = 14.00 (50 - 36)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('DISPUTED ticket is self-payable (S7 fix to WalletServiceImpl)', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(body.data.ticketStatus).to.eql('PAID');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "127d51e5-0474-4d44-a5a1-163856143c4e",
+          "name": "Upload Batch (Event Too Old - Rejected)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{conductorAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/sync/upload",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sync",
+                "upload"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"events\": [\n    {\n      \"eventId\": \"{{$guid}}\",\n      \"conductorId\": \"{{conductorId}}\",\n      \"userId\": \"{{userId}}\",\n      \"passengerQrToken\": \"{{qrToken}}\",\n      \"busId\": \"{{busId}}\",\n      \"routeId\": \"{{routeId}}\",\n      \"originStop\": \"HSR Layout\",\n      \"destinationStop\": \"KR Puram Railway Station\",\n      \"issuedAt\": \"{{tooOldIssuedAt}}\",\n      \"clientFare\": 36.00\n    }\n  ]\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();",
+                  "pm.collectionVariables.set('tooOldIssuedAt', tenDaysAgo);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Event older than maxSyncAgeDays (7) is REJECTED (bad data, never retried)', function () {",
+                  "    pm.expect(body.data.rejected).to.eql(1);",
+                  "    pm.expect(body.data.failed).to.eql(0);",
+                  "    pm.expect(body.data.results[0].status).to.eql('REJECTED');",
+                  "    pm.expect(body.data.results[0].message).to.eql(",
+                  "        'Event too old \u2014 possible replay or clock manipulation');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "326fbda2-5793-477e-b12a-53ef0b3a10e4",
+          "name": "Upload Batch (Partial Batch - Mixed Outcomes)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{conductorAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/sync/upload",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sync",
+                "upload"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"events\": [\n    {\n      \"eventId\": \"{{$guid}}\",\n      \"conductorId\": \"{{conductorId}}\",\n      \"userId\": \"{{userId}}\",\n      \"passengerQrToken\": \"{{qrToken}}\",\n      \"busId\": \"{{busId}}\",\n      \"routeId\": \"{{routeId}}\",\n      \"originStop\": \"HSR Layout\",\n      \"destinationStop\": \"KR Puram Railway Station\",\n      \"issuedAt\": \"{{$isoTimestamp}}\",\n      \"clientFare\": 36.00\n    },\n    {\n      \"eventId\": \"{{$guid}}\",\n      \"conductorId\": \"{{conductorId}}\",\n      \"userId\": \"{{userId}}\",\n      \"passengerQrToken\": \"not-a-real-jwt\",\n      \"busId\": \"{{busId}}\",\n      \"routeId\": \"{{routeId}}\",\n      \"originStop\": \"HSR Layout\",\n      \"destinationStop\": \"KR Puram Railway Station\",\n      \"issuedAt\": \"{{$isoTimestamp}}\",\n      \"clientFare\": 36.00\n    },\n    {\n      \"eventId\": \"{{$guid}}\",\n      \"conductorId\": \"{{conductorId}}\",\n      \"userId\": \"{{userId}}\",\n      \"passengerQrToken\": \"{{qrToken}}\",\n      \"busId\": \"11111111-1111-1111-1111-111111111111\",\n      \"routeId\": \"{{routeId}}\",\n      \"originStop\": \"HSR Layout\",\n      \"destinationStop\": \"KR Puram Railway Station\",\n      \"issuedAt\": \"{{$isoTimestamp}}\",\n      \"clientFare\": 36.00\n    }\n  ]\n}"
+            },
+            "description": "Run `UPDATE wallet SET balance = 150.00 WHERE user_id = '{{userId}}';` via psql first so the valid event in this batch has something to SYNCED against."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('1 synced, 2 rejected (bad QR + bus mismatch), independently', function () {",
+                  "    pm.expect(body.data.totalEvents).to.eql(3);",
+                  "    pm.expect(body.data.synced).to.eql(1);",
+                  "    pm.expect(body.data.rejected).to.eql(2);",
+                  "    pm.expect(body.data.failed).to.eql(0);",
+                  "    pm.expect(body.data.disputed).to.eql(0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "Sprint 7 \u2014 S7-19 offline sync engine (S7A-22 verification sequence). Run Conductor Auth > Login and User > QR Token first to populate {{conductorId}}, {{busId}}, {{routeId}}, {{qrToken}}, {{userId}}."
     }
   ]
 }

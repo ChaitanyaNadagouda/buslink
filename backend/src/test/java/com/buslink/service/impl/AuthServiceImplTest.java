@@ -3,6 +3,7 @@ package com.buslink.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -60,10 +61,15 @@ class AuthServiceImplTest {
             user.setUserId(generatedUserId);
             return user;
         });
+        when(jwtUtil.generatePassengerQrToken(any(User.class))).thenReturn("signed-qr-jwt");
         when(jwtUtil.generateAccessToken(any(User.class))).thenReturn("access-token");
         when(jwtUtil.generateRefreshToken(any(User.class))).thenReturn("refresh-token");
 
         AuthResponseDTO response = authService.register(request);
+
+        ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository, times(2)).save(userCaptor.capture());
+        assertThat(userCaptor.getValue().getQrToken()).isEqualTo("signed-qr-jwt");
 
         ArgumentCaptor<Wallet> walletCaptor = ArgumentCaptor.forClass(Wallet.class);
         verify(walletRepository).save(walletCaptor.capture());

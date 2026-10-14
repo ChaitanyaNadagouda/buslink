@@ -8,11 +8,30 @@ BusLink
 
 ## Current Sprint
 
-Sprint 6
+Sprint 7
 
 ## Current Objective
 
-Sprint 6 is closed. Unlocked the admin layer and added analytics + Redis caching:
+Sprint 7 is in progress. Building the offline sync engine: passenger QR
+upgraded to a signed JWT (`generatePassengerQrToken`/`validatePassengerQrToken`
+in `JwtUtil`, 24hr expiry, `POST /user/qr/refresh`), ticket QR stays an
+unsigned `ticketId` since the backend recalculates fare at sync time
+regardless (`POST /tickets/scan` for the online payment path), push
+notifications removed entirely in favor of the QR-scan model. Core addition is
+`POST /sync/upload` (ROLE_CONDUCTOR) — a non-transactional batch loop calling a
+separate `SyncEventProcessor` bean (`@Transactional` per event, so one event's
+failure never rolls back already-committed ones) that idempotency-checks,
+validates conductor/bus/passenger-QR/stops, recalculates fare server-side, and
+resolves each event to SYNCED (wallet covers it, ticket PAID), DISPUTED
+(wallet + overdraft insufficient, ticket DISPUTED, no deduction, no
+idempotency key so it can be retried manually via existing wallet payment), or
+FAILED (technical/validation failure, retried automatically by a scheduler —
+DISPUTED never is). Also: `GET /sync/status` (per-status counts), 3 schedulers
+(FAILED retry every 5min, ticket expiry after 24hr ISSUED, idempotency-key
+cleanup), and `GET /admin/analytics/disputed-tickets`. See
+`docs/sprints/Sprint-07.md` for the full task list and Definition of Done.
+
+**Previous sprint — Sprint 6 (closed 2026-09-06).** Unlocked the admin layer and added analytics + Redis caching:
 `Admin` entity + `AdminPrincipal` + `AdminDetailsServiceImpl` (same recipe as
 conductor auth), `POST /admin/auth/login` issuing a ROLE_ADMIN JWT, a seeded
 `admin@buslink.com` account, and all pre-existing `/admin/**` endpoints (Sprint 3)

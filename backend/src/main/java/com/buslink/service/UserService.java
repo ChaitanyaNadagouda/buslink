@@ -13,4 +13,6 @@ public interface UserService {
     UserProfileResponseDTO getUserProfile(UUID userId);
 
     String getQrToken(UUID userId);
+
+    String refreshQrToken(UUID userId);
 }
