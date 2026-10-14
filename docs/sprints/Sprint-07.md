@@ -16,7 +16,7 @@ schedulers for retry, expiry, and cleanup.
 ### QR Model Changes
 - Passenger QR → signed JWT (userId, userStatus, deviceId, exp=24hr)
 - `POST /user/qr/refresh` — daily QR renewal endpoint
-- Ticket QR → plain JSON payload (ticketId, sourceStop, destinationStop, fare,
+- Ticket QR → plain JSON payload (ticketId, originStop, destinationStop, totalFare,
   conductorId, issuedAt, exp=issuedAt+1hr) — no signing needed
 - `POST /tickets/scan` — passenger scans conductor's ticket QR to get confirm screen
 - Push notifications REMOVED entirely — QR scan model replaces it always
@@ -52,9 +52,9 @@ schedulers for retry, expiry, and cleanup.
 ```json
 {
   "ticketId": "uuid",
-  "sourceStop": "Majestic",
+  "originStop": "Majestic",
   "destinationStop": "Hebbal",
-  "fare": 25.00,
+  "totalFare": 25.00,
   "conductorId": "uuid",
   "issuedAt": "2026-10-01T15:32:00Z",
   "exp": "2026-10-01T16:32:00Z"
@@ -200,16 +200,16 @@ Scheduler ONLY retries FAILED, never DISPUTED.
     ```json
     {
       "ticketId": "uuid",
-      "sourceStop": "Majestic",
+      "originStop": "Majestic",
       "destinationStop": "Hebbal",
-      "fare": 25.00,
+      "totalFare": 25.00,
       "conductorId": "uuid",
       "issuedAt": "2026-10-01T15:32:00Z",
       "exp": "2026-10-01T16:32:00Z"
     }
     ```
-  - Verify `IssueTicketResponseDTO` exposes: ticketId, sourceStop,
-    destinationStop, fare, conductorId, issuedAt
+  - Verify `IssueTicketResponseDTO` exposes: ticketId, originStop,
+    destinationStop, totalFare, conductorId, issuedAt
   - Frontend sets `exp = issuedAt + 1hr` before encoding QR
   - No signing — plain JSON. Backend never reads `exp` at sync time.
   - Offline passenger app reads QR locally → renders confirm screen →
@@ -256,9 +256,9 @@ Scheduler ONLY retries FAILED, never DISPUTED.
 - [x] S7-06 — Update `SecurityConfig.java`:
   - [x] `POST /user/qr/refresh` → ROLE_PASSENGER (done with S7-03)
   - [x] `POST /tickets/scan` → ROLE_PASSENGER (done with S7-05)
-  - [ ] `POST /sync/upload` → ROLE_CONDUCTOR (blocked on S7-19 — no
-        `SyncController` exists yet to route to)
-  - [ ] `GET /sync/status` → ROLE_CONDUCTOR (blocked on S7-19)
+  - [x] `POST /sync/upload` → ROLE_CONDUCTOR (done with S7-19, via a blanket
+        `/sync/**` rule rather than two separate method-scoped matchers)
+  - [x] `GET /sync/status` → ROLE_CONDUCTOR (done with S7-19)
   - Verify: existing auth flows unaffected
 
 ### Enum + DB Constraint Updates
@@ -295,7 +295,7 @@ Scheduler ONLY retries FAILED, never DISPUTED.
 
 ### Repository
 
-- [ ] S7-09 — Create `SyncEventRepository.java` in `repository/`:
+- [x] S7-09 — Create `SyncEventRepository.java` in `repository/`:
   - `List<SyncEvent> findByConductorIdAndStatusOrderByCreatedAtAsc(UUID, SyncStatus)`
   - `List<SyncEvent> findByStatusOrderByCreatedAtAsc(SyncStatus)`
     ← retry scheduler fetches all FAILED across all conductors
@@ -307,9 +307,20 @@ Scheduler ONLY retries FAILED, never DISPUTED.
     ← ticket expiry scheduler
   - Verify: `./mvnw compile clean`, app boots (derived queries parsed)
 
+  **Deviation (discussed, approved):** two additions and one later replacement.
+  (1) Extra `TicketRepository.findByStatus(TicketStatus)`, needed by S7-20's
+  `GET /admin/analytics/disputed-tickets`. (2) Extra
+  `SyncEventRepository.findByIdForUpdate` (`@Lock(PESSIMISTIC_WRITE)` + JPQL
+  `@Query`), added 2026-10-13 by the race-condition fix: a separate method,
+  not an override of `findById`, so plain reads stay lock-free. (3) The retry
+  query `findByStatusOrderByCreatedAtAsc` was replaced 2026-10-13 by
+  `findByStatusAndFailedAttemptsLessThanOrderByCreatedAtAsc` for the retry cap
+  (see S7-16). `findByConductorIdAndStatusOrderByCreatedAtAsc` is built but not
+  called yet; kept deliberately for a future per-conductor detail view.
+
 ### Configuration
 
-- [ ] S7-10 — Add sync + expiry config to `application.properties`:
+- [x] S7-10 — Add sync + expiry config to `application.properties`:
   ```
   sync.retry.interval-ms=300000
   sync.max-sync-age-days=7
@@ -327,20 +338,29 @@ Scheduler ONLY retries FAILED, never DISPUTED.
     (ApplicationContextRunner pattern from Sprint 4/5/6)
   - Verify: `./mvnw test -Dtest=SyncPropertiesTest,TicketExpiryPropertiesTest`
 
+  **Deviation (discussed, approved):** the property is
+  `sync.retry-interval-ms`, not `sync.retry.interval-ms`. Required for
+  binding: with the dot, Spring looks for a nested `retry` object with an
+  `intervalMs` field and never binds the flat record field `retryIntervalMs`.
+  The hyphen keeps it flat. Two settings added later to `SyncProperties`
+  (2026-10-13): `sync.clock-skew-tolerance-minutes=5` (QR expiry and
+  future-time checks, see S7-14) and `sync.max-retry-attempts=10` (retry cap,
+  see S7-16). `SyncPropertiesTest` asserts all four.
+
 ### DTOs
 
-- [ ] S7-11 — Request DTOs in `dto/request/` (Java records):
+- [x] S7-11 — Request DTOs in `dto/request/` (Java records):
   - `ScanTicketRequestDTO` — ticketId (@NotNull) ← for POST /tickets/scan
   - `SyncEventRequestDTO` — eventId (@NotNull UUID), conductorId (@NotNull UUID),
     userId (@NotNull UUID), passengerQrToken (@NotNull String),
-    sourceStop (@NotBlank), destinationStop (@NotBlank),
+    originStop (@NotBlank), destinationStop (@NotBlank),
     busId (@NotNull UUID), routeId (@NotNull UUID),
     issuedAt (@NotNull Instant), clientFare (BigDecimal — logged only, never trusted)
   - `SyncBatchRequestDTO` — events (@NotEmpty @Valid List<SyncEventRequestDTO>)
     Note: @Valid on nested list required — same lesson as Sprint 3
     `CreateRouteRequestDTO.stops`
 
-- [ ] S7-12 — Response DTOs in `dto/response/` (Java records):
+- [x] S7-12 — Response DTOs in `dto/response/` (Java records):
   - `SyncEventResultDTO` — eventId (UUID), status (SyncStatus),
     ticketId (UUID nullable), message (String)
     message examples:
@@ -354,14 +374,14 @@ Scheduler ONLY retries FAILED, never DISPUTED.
   - `SyncStatusResponseDTO` — conductorId (UUID), pending (long),
     processing (long), synced (long), failed (long), disputed (long)
   - `DisputedTicketDTO` — ticketId, passengerName, conductorName,
-    routeName, sourceStop, destinationStop, fare, issuedAt
+    routeName, originStop, destinationStop, totalFare, issuedAt
   - Verify: `./mvnw compile clean`
 
 ### Core Sync Service
 
-- [ ] S7-13 — Create `SyncService.java` interface in `service/`
+- [x] S7-13 — Create `SyncService.java` interface in `service/`
 
-- [ ] S7-14 — Create `SyncEventProcessor.java` `@Service` in `service/`:
+- [x] S7-14 — Create `SyncEventProcessor.java` `@Service` in `service/`:
   CRITICAL: Separate bean — NOT inner class of SyncServiceImpl
   Required for per-event @Transactional isolation
 
@@ -404,7 +424,7 @@ Scheduler ONLY retries FAILED, never DISPUTED.
   → UserStatus != ACTIVE → FAILED "Passenger inactive"
 
   Step 7 — Validate stops:
-  routeStopRepository.findByRouteIdAndStopName(routeId, sourceStop)
+  routeStopRepository.findByRouteIdAndStopName(routeId, originStop)
   routeStopRepository.findByRouteIdAndStopName(routeId, destinationStop)
   → Either absent → FAILED "Invalid stop"
   → destSequence <= originSequence → FAILED "Invalid direction"
@@ -444,7 +464,44 @@ Scheduler ONLY retries FAILED, never DISPUTED.
   - `@Transactional` on processEvent()
   - Verify: `./mvnw compile clean`
 
-- [ ] S7-15 — Create `SyncServiceImpl.java` in `service/impl/`:
+  **Deviations (discussed, approved):**
+  - **`SyncEvent` entity reshaped.** Sprint 1's generic `entityType` /
+    `entityId` / `payload` (jsonb) fields and the `SyncEntityType` enum were
+    replaced with typed sync fields (`conductorId`, `userId`,
+    `passengerQrToken`, `busId`, `routeId`, `originStop`, `destinationStop`,
+    `issuedAt`, `clientFare`, `resultTicketId`, `errorMessage`). The retry
+    scheduler (S7-16) has to rebuild a `SyncEventRequestDTO` from stored
+    fields, which a generic JSON payload made awkward and untyped. `eventId`
+    lost `@GeneratedValue`: it's client-assigned, so a re-uploaded event is
+    recognisable as the same one. The live table's leftover columns were
+    dropped 2026-10-13 (see carry-over).
+  - **Step 1 skipped: no `IdempotencyKey` lookup or store.** The `SyncEvent`
+    row, keyed by the client's `eventId` and never deleted, is already a
+    permanent idempotency guard. A separate 24h `IdempotencyKey` would only
+    duplicate it, more weakly (it expires). Consequence: the DoD line
+    "Exceeds overdraft → … no IdempotencyKey" holds trivially (no path stores
+    one).
+  - **Step 8: one adult fare only.** The offline payload (and the ticket QR
+    from S7-04) carries a single fare, with no adults/children/infants
+    breakdown, so `stagesCrossed × farePerStage` for one adult; the ticket is
+    stored with `adultCount=1`, `childCount=0`, `infantCount=0`.
+  - **Extra validations beyond the plan:** the event's `conductorId` must
+    match the JWT's conductor ("Conductor mismatch"); the bus's route must
+    match the event's `routeId` ("Route mismatch"); the userId inside the
+    passenger QR must match the event's `userId` ("Invalid QR token").
+  - **Later changes (2026-10-13), each recorded in full under Open Items /
+    Carry-over below:** (a) concurrency: locked lookup
+    (`findByIdForUpdate`), `SyncEvent implements Persistable` so a new
+    event's save is a real INSERT, `saveAndFlush` at the PROCESSING claim;
+    (b) passenger QR validated at **boarding time** (`issuedAt`) via
+    `JwtUtil.extractUserIdFromPassengerQrAt`, plus a new
+    "Event issued in the future" check, both with a 5-min clock tolerance;
+    (c) data problems now end in **`REJECTED`** via a new `reject()` (final,
+    never retried), `fail()` is only the unexpected-error catch-all and
+    increments `failedAttempts`; REJECTED is treated as final on re-upload
+    (`isFinal`).
+
+- [x] S7-15 — Create `SyncServiceImpl.java` in `service/impl/`:
 
   `processSyncBatch(SyncBatchRequestDTO, UUID conductorId)`:
   ```java
@@ -474,9 +531,19 @@ Scheduler ONLY retries FAILED, never DISPUTED.
 
   Verify: `./mvnw compile clean`
 
+  **Deviation (discussed, approved, 2026-10-13):** (1) Each event now goes
+  through `processIsolated()`, a per-event try/catch around `processEvent()`.
+  Errors thrown at COMMIT (outside `processEvent`'s own try/catch) no longer
+  abort the rest of the batch. The event is reported FAILED "Could not be
+  processed — please re-upload", **nothing is saved** for it, collisions are
+  logged at WARN and anything else at ERROR. (2) A `rejected` count was added
+  to `SyncBatchResponseDTO` and `SyncStatusResponseDTO` for the new
+  `REJECTED` status. See `docs/SYNC_RACE_CONDITIONS.md` §16 and the Open
+  Items / Carry-over notes below.
+
 ### Schedulers
 
-- [ ] S7-16 — Create `SyncRetryScheduler.java` in `scheduler/`:
+- [x] S7-16 — Create `SyncRetryScheduler.java` in `scheduler/`:
   - `@EnableScheduling` on this class (consistent with `@EnableCaching`
     on `RedisConfig` — not on main class)
   - `@Scheduled(fixedDelayString = "${sync.retry.interval-ms}")`
@@ -487,7 +554,17 @@ Scheduler ONLY retries FAILED, never DISPUTED.
   - Log retry outcome
   - Verify: app boots, scheduler registers in startup log
 
-- [ ] S7-17 — Create `TicketExpiryScheduler.java` in `scheduler/`:
+  **Deviations (discussed, approved):** (1) The placeholder is
+  `${sync.retry-interval-ms}` (see S7-10's binding note). (2) 2026-10-13:
+  only **FAILED events under the retry cap** are fetched
+  (`findByStatusAndFailedAttemptsLessThanOrderByCreatedAtAsc(FAILED,
+  sync.max-retry-attempts=10)`). DISPUTED and the new REJECTED (bad data) are
+  never retried, and capped "poison" events are skipped but stay FAILED, so a
+  re-upload still works. (3) 2026-10-13: a per-event try/catch, so one
+  event's commit-time error doesn't end the run; nothing is saved on error;
+  the log line reports the errored count. Tested in `SyncRetrySchedulerTest`.
+
+- [x] S7-17 — Create `TicketExpiryScheduler.java` in `scheduler/`:
   - `@Scheduled(fixedDelayString = "${ticket.expiry.check-interval-ms}")`
   - `ticketRepository.findByStatusAndIssuedAtBefore(ISSUED, threshold)`
     where threshold = `Instant.now().minus(thresholdHours, ChronoUnit.HOURS)`
@@ -495,16 +572,21 @@ Scheduler ONLY retries FAILED, never DISPUTED.
   - Log count per run
   - Verify: compile clean
 
-- [ ] S7-18 — Create `IdempotencyKeyCleanupScheduler.java` in `scheduler/`:
+- [x] S7-18 — Create `IdempotencyKeyCleanupScheduler.java` in `scheduler/`:
   - `@Scheduled(fixedDelayString = "${idempotency.cleanup.interval-ms}")`
   - `idempotencyKeyRepository.deleteByExpiresAtBefore(Instant.now())`
     Note: `deleteByExpiresAtBefore` added in Sprint 4 (S4-05) — finally used
   - Log count deleted
   - Verify: compile clean
 
+  **Deviation (discussed, approved):** `IdempotencyKeyRepository.deleteByExpiresAtBefore`
+  return type changed from `void` (Sprint 4) to `long`, so the scheduler can
+  log how many keys it deleted, as this task asks. Spring Data derived delete
+  methods support returning the count; no other caller was affected.
+
 ### Controller
 
-- [ ] S7-19 — Create `SyncController.java` in `controller/`:
+- [x] S7-19 — Create `SyncController.java` in `controller/`:
   - `POST /sync/upload` (ROLE_CONDUCTOR):
     → Extract conductorId from `@AuthenticationPrincipal ConductorPrincipal`
     → `@Valid` on request body
@@ -518,7 +600,7 @@ Scheduler ONLY retries FAILED, never DISPUTED.
 
 ### Analytics Update
 
-- [ ] S7-20 — Update `AnalyticsServiceImpl` + `AnalyticsController`:
+- [x] S7-20 — Update `AnalyticsServiceImpl` + `AnalyticsController`:
   - `GET /admin/analytics/disputed-tickets` (ROLE_ADMIN):
     → `ticketRepository.findByStatus(TicketStatus.DISPUTED)`
     → Enrich: passengerName (User lookup), conductorName (Conductor lookup),
@@ -528,7 +610,7 @@ Scheduler ONLY retries FAILED, never DISPUTED.
 
 ### Testing & Verification
 
-- [ ] S7-21 — Unit tests: `SyncEventProcessorTest.java` in `src/test/`:
+- [x] S7-21 — Unit tests: `SyncEventProcessorTest.java` in `src/test/`:
   Mock: `SyncEventRepository`, `IdempotencyKeyRepository`,
   `UserRepository`, `ConductorRepository`, `BusRepository`,
   `RouteRepository`, `RouteStopRepository`, `WalletRepository`,
@@ -560,7 +642,7 @@ Scheduler ONLY retries FAILED, never DISPUTED.
   - Verify: `./mvnw test -Dtest=SyncEventProcessorTest` — 9/9 pass
   - Full suite: `./mvnw test` — all pass
 
-- [ ] S7-22 — Postman verification sequence:
+- [x] S7-22 — Postman verification sequence:
 
   **QR model verification:**
   1. `GET /user/qr` (passengerToken)
@@ -569,7 +651,7 @@ Scheduler ONLY retries FAILED, never DISPUTED.
   2. `POST /user/qr/refresh` (passengerToken)
      → expect new JWT with fresh exp
   3. `POST /tickets/issue` (conductorToken)
-     → note ticketId, sourceStop, destinationStop, fare, issuedAt in response
+     → note ticketId, originStop, destinationStop, totalFare, conductorId, issuedAt in response
      → frontend would encode full JSON payload as ticket QR
   4. `POST /tickets/scan` (passengerToken, ticketId from step 3)
      → expect ticket details returned (online confirm screen)
@@ -605,11 +687,11 @@ Scheduler ONLY retries FAILED, never DISPUTED.
 
   **Replay / too-old event:**
   21. `POST /sync/upload` with issuedAt = 10 days ago
-      → failed=1, "Event too old"
+      → rejected=1, "Event too old" (REJECTED since 2026-10-13, was failed=1)
 
   **Partial batch:**
   22. Batch of 3: valid + invalid QR + bus mismatch
-      → synced=1, failed=2
+      → synced=1, rejected=2 (both are bad data → REJECTED since 2026-10-13, was failed=2)
 
   **Ticket expiry:**
   23. Issue ticket → ticketId, status=ISSUED
@@ -648,6 +730,303 @@ Scheduler ONLY retries FAILED, never DISPUTED.
 
 ---
 
+## Bug found + fixed during S7-22 verification prep (2026-10-10)
+
+**Symptom (would have been):** step 20's self-pay flow — `POST /payments/wallet`
+on a `DISPUTED` ticket — would have 400'd with "Ticket is not awaiting
+payment" instead of resolving the dispute.
+
+**Root cause:** `WalletServiceImpl.payViaWallet` (Sprint 4) only ever accepted
+`TicketStatus.ISSUED`. The *earlier, superseded* draft of this sprint's plan
+expected exactly that 400 (DISPUTED needed admin resolution back then); the
+**finalized** plan redesigned DISPUTED resolution around this same endpoint
+(*"passenger sees DISPUTED in history → taps [Pay Now] → uses existing
+`POST /payments/wallet` → no admin needed"*) but never updated the guard to
+match. Caught by re-reading the method against the finalized plan before
+running the Postman sequence, not during the run itself.
+
+**Fix:** widened the check to `status != ISSUED && status != DISPUTED`. No
+other change needed — the deduction amount was already server-computed from
+`ticket.getTotalFare()`, independent of which status let it through. New
+regression test `payViaWallet_disputedTicket_success` added; full
+`WalletServiceImplTest` suite (8/8) passes.
+
+---
+
+## Open Items / Known Limitations (revisit at sprint close)
+
+Running list of gaps raised and consciously deferred during implementation —
+not blocking, but not to be forgotten either.
+
+- ~~**`IssueTicketResponseDTO` missing `conductorId`.**~~ **Resolved
+  2026-10-11.** S7-04's ticket-QR JSON payload design needs it (alongside
+  `ticketId`/`originStop`/`destinationStop`/`totalFare`/`issuedAt`), but the DTO was
+  never updated. Flagged during S7-11/12. Fixed by adding `UUID conductorId`
+  (after `userId`) to the record and mapping `ticket.getConductorId()` in
+  `TicketServiceImpl.toIssueResponseDTO`. No schema change: `Ticket` already
+  stored it. `PUT /tickets/{id}/terminate` shares the DTO, so its response
+  gains the field too. `issueTicket_success` now asserts it. Full suite:
+  92/92 pass. Naming alignment (same day): the plan's QR payload sketches
+  originally said `sourceStop`/`fare`, but every real DTO
+  (`IssueTicketResponseDTO`, `SyncEventRequestDTO`, `DisputedTicketDTO`) uses
+  `originStop`/`totalFare`, the API's established names since Sprint 4's
+  `sourceStop`→`originStop` rename. This file was updated to use the API
+  names throughout; no code renamed. The QR payload now uses the response
+  fields exactly as returned, with no mapping needed on the frontend.
+- **`SyncEvent.status = PROCESSING` doesn't actually prevent a scheduler
+  double-pick**, despite that being Step 3's stated reason. `processEvent()`
+  is one `@Transactional` method — `PROCESSING` is set and then unconditionally
+  overwritten by a terminal status (`SYNCED`/`FAILED`/`DISPUTED`) before the
+  method returns, so it's never the value present when the transaction
+  actually commits. No external reader (including `SyncRetryScheduler`) can
+  ever observe `PROCESSING` in the database under the current design. A real
+  fix would need the `PROCESSING` write to commit in its own transaction
+  (e.g. `@Transactional(propagation = REQUIRES_NEW)`) before `resolve()`
+  starts. Not fixed now — the actual financial risk (two concurrent attempts
+  both debiting the same wallet) is still caught by `Wallet.version`'s
+  optimistic lock, which turns the race into one cleanly-`FAILED` duplicate
+  attempt rather than a double deduction. Known limitation, not a correctness
+  bug.
+  **⚠ Re-assessed 2026-10-11: the paragraph above is inaccurate.** The race
+  does not fail "cleanly": the commit-time exception escapes `processEvent()`'s
+  `try/catch` and aborts the rest of the batch. The DISPUTED path never writes
+  `Wallet`, so `@Version` gives no protection there and duplicate DISPUTED
+  tickets are possible. Brand-new events can also be double-processed via
+  `save()` → `merge`. Full analysis, diagrams and the proposed fix (Option B:
+  pessimistic lock + `Persistable` + per-event `try/catch`) are in
+  `docs/SYNC_RACE_CONDITIONS.md`.
+  **✅ Resolved 2026-10-13 (deviation, discussed and approved).** Implemented
+  Option B: `SyncEventRepository.findByIdForUpdate` (`@Lock(PESSIMISTIC_WRITE)`)
+  for the check; `SyncEvent implements Persistable<UUID>` (transient
+  `isNew`, default `true`, flipped by `@PostLoad`/`@PrePersist`) so a new
+  event's save is a real INSERT guarded by the primary key; `saveAndFlush` at
+  the PROCESSING claim so a losing duplicate fails before doing any work; and a
+  per-event try/catch in both `SyncServiceImpl` and `SyncRetryScheduler` that
+  reports FAILED "please re-upload" and **saves nothing**. `PROCESSING` itself
+  is still never visible outside the transaction (`GET /sync/status` →
+  `processing: 0`), which is accepted. 6 new tests; full suite 98/98. Detail in
+  `docs/SYNC_RACE_CONDITIONS.md` §16.
+- **All three schedulers (`SyncRetryScheduler`, `TicketExpiryScheduler`,
+  `IdempotencyKeyCleanupScheduler`) would run redundantly on every instance**
+  if BusLink is ever horizontally scaled. Spring's `@Scheduled` has no
+  built-in cross-instance coordination — each instance fires its own copy on
+  its own clock. Not a problem today (single-instance deployment per
+  `ARCHITECTURE.md`); the fix if/when that changes is a distributed lock
+  (e.g. ShedLock) wrapping each `@Scheduled` method, not a Quartz-level
+  rewrite. Noted, not actioned.
+
+---
+
+## Carry-over: S7-09..S7-18 review findings (2026-10-11)
+
+Review done task by task against the code. S7-09..S7-13, S7-15, S7-17 and
+S7-18 match their task text and are ticked. **S7-14 and S7-16 stay unchecked**
+until the decisions below are made. Pick up next session, **before S7-22**.
+
+~~**Blocker: stale `sync_event` columns (needs approval, DB change).**~~
+**✅ Resolved 2026-10-13 (deviation, discussed and approved).** One `psql`
+transaction: `ALTER TABLE sync_event DROP COLUMN entity_id, DROP COLUMN
+entity_type, DROP COLUMN payload, ALTER COLUMN error_message TYPE TEXT`
+(`sync_event_entity_type_check` dropped with its column). Entity updated to
+match: `errorMessage` → `@Column(columnDefinition = "TEXT")`, so a fresh DB
+gets the same shape (`ddl-auto=update` never alters an existing column; both
+changes are needed). Verified via `\d sync_event` plus a rollback-wrapped
+`INSERT` of exactly the entity's columns with a 600-char `error_message`
+(stored in full; 0 rows after `ROLLBACK`). Full suite 98/98,
+`contextLoads` green. Options weighed: drop columns (chosen; the table was
+empty and this leaves no junk) vs. relax `NOT NULL` (leaves confusing dead
+columns) vs. drop and recreate the table (too broad) vs. Flyway (out of
+scope this sprint); `TEXT` (chosen; the full message is kept for debugging,
+same performance as varchar in Postgres) vs. truncating in Java. Side
+finding: before the fix, the NOT NULL failure would have been caught by the
+new per-event try/catch and logged as a "concurrent race" (same
+`DataIntegrityViolationException` type), so every event would have come back
+FAILED for a misleading reason. Original note follows. The
+`SyncEvent` entity was reshaped this sprint: Sprint 1's generic
+`entityType`/`entityId`/`payload` (and the `SyncEntityType` enum) were
+replaced by typed sync fields, which the retry scheduler needs to rebuild a
+request. `ddl-auto=update` never drops columns, so the live table still has
+`entity_id uuid NOT NULL`, `entity_type varchar NOT NULL` (+
+`sync_event_entity_type_check`) and `payload jsonb NOT NULL`. **Every insert
+into `sync_event` would fail.** Unit tests are mocked and can't see this; it
+would surface at S7-22 step 10. Same `ddl-auto` blind spot as Sprint 4's
+`ticket_status_check`. Proposed fix via `psql` (table has 0 rows): drop the 3
+columns, and change `error_message` from `varchar(255)` to `TEXT` (the
+catch-all stores `ex.getMessage()`, which can exceed 255 chars).
+
+~~**Design decision: passenger QR expiry checked at sync time (S7-14).**~~
+**✅ Resolved 2026-10-13 (deviation, discussed and approved).** The rule at
+sync time is now "the passenger QR was valid **at boarding time**"
+(`event.issuedAt`), not "is valid now". New
+`JwtUtil.extractUserIdFromPassengerQrAt(token, at, clockSkew)`: jjwt parser
+clock set to `at`, with `clockSkewSeconds`, still verifying signature and
+type. It shares a private `parsePassengerQrToken` with the unchanged
+`validatePassengerQrToken`, so `GET /user/qr` self-heal (which correctly
+checks against now) is untouched. New rule: `issuedAt > now + tolerance` →
+FAILED "Event issued in the future — device clock is wrong" (a future time
+otherwise slipped past the too-old check). Tolerance is configurable:
+`sync.clock-skew-tolerance-minutes=5` (`SyncProperties.clockSkewToleranceMinutes`).
+**Lean version chosen:** a `QR iat ≤ issuedAt` lower bound was considered and
+dropped. It stops no realistic attack (a cheater would pick a time *inside* an
+old QR's window) and would reject honest scans whenever the conductor's phone
+clock runs slightly behind the server's. Known remaining gap: a dishonest
+device can still pick a time inside an old QR's 24h window. Bounded by
+`maxSyncAgeDays`; real defence is the `deviceId` check (Sprint 8). Tests:
+4 new `JwtUtilTest` (inside window, just past exp within skew, past exp,
+tampered), `processEvent_failed_issuedInFuture`, `SyncPropertiesTest`
+updated; full suite 103/103. Original note follows.
+`extractUserIdFromPassengerQr` → `validatePassengerQrToken` checks `exp`
+against *now*. The QR lives 24h from generation, but offline events may sync
+up to 7 days later (`maxSyncAgeDays`), so any event synced more than ~24h
+after QR generation is FAILED "Invalid QR token", even though the QR was valid
+at boarding. Proposed fix: still verify signature + type at sync, but check
+expiry against `event.issuedAt` (a jjwt parser with its clock set to
+`issuedAt`), plus a `JwtUtilTest` case. The Postman sequence syncs
+immediately, so it won't catch this.
+
+~~**Design decision: permanent failures retried forever (S7-16).**~~
+**✅ Resolved 2026-10-13 (deviation, discussed and approved). Option (c).**
+- **New `SyncStatus.REJECTED`** for data problems (conductor/bus/route
+  mismatch, too old, future, invalid QR, passenger inactive, invalid
+  stop/direction): a final state, never retried. `SyncEventProcessor` has a
+  new `reject()`; `fail()` (FAILED) is now only the unexpected-error
+  catch-all. REJECTED joined SYNCED/DISPUTED in the "already final" check
+  (`isFinal`), so a re-upload returns the stored reason without
+  re-validating; reprocessing the same data can't change the answer.
+  "Passenger inactive" treated as permanent on purpose: if an account is
+  reactivated, a background job shouldn't auto-charge the old ride without
+  review.
+- **Retry cap for FAILED**: new `SyncEvent.failedAttempts` (incremented by
+  `fail()` only), `sync.max-retry-attempts=10` (10 × 5 min = 50 min);
+  scheduler query is now
+  `findByStatusAndFailedAttemptsLessThanOrderByCreatedAtAsc`. Guards against
+  "poison" events (e.g. a code bug that fails every time). A capped event
+  stays FAILED, so a conductor re-upload still reprocesses it. The phone is
+  the final safety net, so the exact cap number matters little.
+- **API:** `rejected` count added to `SyncBatchResponseDTO` and
+  `SyncStatusResponseDTO`. Client contract to document in `API.md`: FAILED =
+  keep and re-upload later; REJECTED = final, stop sending.
+- **DB:** `sync_event_status_check` recreated with `'REJECTED'` (`psql`,
+  rollback-wrapped INSERT proof, same as S7-07); `failed_attempts integer
+  NOT NULL` added by `ddl-auto` (table empty), confirmed via
+  `information_schema`.
+- **Tests:** 4 processor tests renamed `*_rejected_*` and now expect
+  REJECTED; partial batch expects `rejected=1, failed=0`; new
+  `…alreadyRejected_returnsStoredReasonWithoutRevalidating`,
+  `…unexpectedError_staysRetryableAndCountsAttempt`,
+  `…rejected_doesNotCountAsFailedAttempt`; scheduler and properties tests
+  updated. Full suite 106/106.
+- **Known limitation:** a DB-level error mid-event aborts the whole
+  transaction, so its FAILED write (and the attempt increment) rolls back
+  too; such events don't advance toward the cap. Acceptable: the per-event
+  catch reports them and a re-upload retries.
+- **Noted, out of scope:** "Bus mismatch" compares against the conductor's
+  bus assignment at **sync** time, so a conductor reassigned between boarding
+  and sync would see an honest event rejected.
+
+Original note follows. FAILED mixes
+temporary failures (DB hiccup, lock conflict: worth retrying) with permanent
+validation failures ("Event too old", "Bus mismatch", "Invalid stop",
+"Invalid QR token": fail identically every time). `SyncRetryScheduler`
+retries all of them every 5 min with no cap, and "Event too old" only gets
+older. This contradicts the plan's own *"FAILED = technical failure → retry
+makes sense"*. Options: (a) new `REJECTED` status for validation failures,
+never retried (recommended: same rule as "DISPUTED is never retried"; needs
+an enum value + check-constraint update like S7-07); (b) `retryCount` with a
+cap; (c) both.
+
+**✅ Recorded 2026-10-14** as "Deviation (discussed, approved)" notes under
+S7-09, S7-10, S7-14, S7-15, S7-16 and S7-18. S7-14 is now ticked (compiles,
+13 processor tests pass). **S7-16 stays unchecked**: the app boots, but the
+task's own Verify line ("scheduler registers in startup log") hasn't been
+observed. Spring doesn't log `@Scheduled` registration, and the job returns
+silently when there are no FAILED events. Confirm during S7-22 by seeing its
+"retried N FAILED event(s)" log line once a FAILED event exists.
+
+~~**Deviations to record (docs only, already in the code):**~~
+- `SyncEvent` entity reshape (above).
+- S7-10: property is `sync.retry-interval-ms`, not `sync.retry.interval-ms`.
+  Required for binding: the dotted form would look for a nested `retry`
+  object, not the flat record field `retryIntervalMs`.
+- S7-14 Step 1 skipped: no `IdempotencyKey` lookup or store. The `SyncEvent`
+  row, keyed by the client's `eventId` and never deleted, is already a
+  permanent idempotency guard; a 24h key would only duplicate it, more weakly.
+- S7-14 Step 8: one adult fare only. The offline payload carries no
+  passenger-count breakdown.
+- S7-14 extra validations beyond the plan: event `conductorId` must match the
+  JWT, the bus's route must match `routeId`, and the QR's userId must match the
+  event's `userId`.
+- S7-09: extra `TicketRepository.findByStatus` (used by S7-20).
+- S7-18: `deleteByExpiresAtBefore` return type `void` → `long`, so the
+  deleted count can be logged.
+
+~~**Also parked:** the race-condition fix (Option B).~~ **Done 2026-10-13**:
+see Open Items above and `docs/SYNC_RACE_CONDITIONS.md` §16. Design worked
+out by the user via a 14-question walkthrough (§15), then implemented the same
+way. **Still to check during S7-22:** the SQL log shows `for no key update` on
+the sync lookup, and a plain `insert into sync_event` (no `select` first) for
+a new event.
+
+---
+
+## S7-22 Verification Run (2026-10-14)
+
+Run by the user in Postman Desktop against a live app + DB, guided step by
+step; `psql` setup/inspection and SQL-log checks done alongside. App started
+with **command-line overrides only** (`application.properties` untouched):
+`--spring.jpa.show-sql=true --sync.retry-interval-ms=10000
+--ticket.expiry.check-interval-ms=5000`, plus
+`--idempotency.cleanup.interval-ms=10000` for the restart in check B.
+
+**Adjustments to the plan's text (not failures):**
+- Offline sync events are one adult (S7-14 deviation), so the fare is **₹36**,
+  not the plan's ₹90. Expected balances became ₹150→₹114 (step 12) and
+  ₹20→**−₹16** (step 16), not ₹60 / −₹70.
+- **Wallet top-up before step 20** added (`psql` → ₹150): the plan says
+  "wallet topped up" but had no step for it, and at −₹80 the passenger can't
+  self-pay ₹36 (effective ₹20).
+- Step 27 (admin disputed list) run **before** step 20, since paying removes
+  the ticket from the list; then re-run after step 20 → `[]`.
+- Steps 21–22 expect `rejected` (not `failed`), per the REJECTED change.
+- Step 23 reused step 3's still-ISSUED ticket instead of issuing another.
+- Collection: re-import resets collection variables, so all three logins
+  must be re-run after importing (a 401 on Issue Ticket traced to this).
+  Access tokens last 15 min; re-run a login on a 401.
+
+**Results, all passing:**
+
+| Steps | Result |
+|---|---|
+| 1–2 | `GET /user/qr` self-healed rider1's **pre-Sprint-7 plain-UUID** QR into a 235-char JWT (persisted); `type=PASSENGER_QR`, `exp−iat=86400`. Refresh → new `iat` (+195 s), fresh 24 h. No `deviceId` claim: rider1 has none (Sprint 8 scope). |
+| 3 | Issue response includes **`conductorId`** (11 Oct fix) plus every ticket-QR field. |
+| 4–6 | Scan → confirm-screen details; unknown id → 404; rider2 scanning rider1's real ticket → **404** (same message as nonexistent; no existence leak). |
+| 7–14 | SYNCED; ticket PAID ₹36 with **`issuedAt` = event's boarding time (12:15:37), `paidAt` = sync time (12:24:24)**; wallet ₹114; same `eventId` re-upload → same `ticketId`, DB shows 1 ticket / 1 DEBIT / balance unchanged; status `synced=1`, `processing=0` (expected, see race doc §4). |
+| 15–16 | Overdraft → SYNCED, −₹16. |
+| 17–20, 27 | DISPUTED with wallet untouched (−₹80, 0 DEBITs); visible in passenger history and admin list (names enriched); self-pay → PAID, ₹150→₹114; admin list then `[]`. |
+| 21–22 | Too old → **REJECTED**; mixed batch → 1 SYNCED + 2 REJECTED ("Invalid QR token", "Bus mismatch"), wallet ₹114→₹78; all REJECTED rows `failed_attempts=0`. |
+| 23–26 | Step 3's ISSUED ticket backdated 25 h → `TicketExpiryScheduler: expired 1` within 2 s → passenger sees EXPIRED. |
+| Final status | `synced 3 · disputed 1 · rejected 3 · failed 0`, exact match with the DB. |
+
+**SQL-log proof of the race-condition fix** (step 10 upload):
+`select … from sync_event … where event_id=? for no key update` (row lock,
+Part A) → `insert into sync_event` with **no merge-SELECT before it**
+(Part B) and **before** any validation query (`saveAndFlush` claim) →
+validation chain → `insert transaction` / `insert ticket` →
+`update sync_event` → `update wallet … where … and version=?`.
+
+**Extra scheduler checks (`psql` test rows, deleted afterwards):**
+- **A, retry job (S7-16):** FAILED event at `failed_attempts=0`, issued 10 days
+  ago → within 10 s `SyncRetryScheduler: retried 1 FAILED event(s), 0 errored`
+  and it became **REJECTED** "Event too old". FAILED event at
+  `failed_attempts=10` (the cap) → **ignored**, unchanged. No retries ever of
+  the real DISPUTED/REJECTED rows (zero "retried" log lines before the test).
+- **B, idempotency cleanup:** one expired + one live test key, app restarted →
+  `purged 1 expired idempotency key(s)`; the live test key **and** step 3's
+  real key kept; next run `purged 0`.
+
+**Bonus:** the passenger ticket list came back newest-first by `issuedAt` with
+3+ tickets, closing the ordering claim left unchecked at Sprint 4 close.
+
 ## Definition of Done
 
 - [x] `GET /user/qr` returns signed JWT (not plain UUID)
@@ -657,18 +1036,18 @@ Scheduler ONLY retries FAILED, never DISPUTED.
 - [x] `POST /tickets/scan` rejects wrong passenger (userId mismatch)
 - [x] `SyncStatus.PROCESSING` + `SyncStatus.DISPUTED` added, DB constraint updated
 - [x] `TicketStatus.DISPUTED` added, DB constraint updated
-- [ ] `IssueTicketResponseDTO` exposes all fields needed for ticket QR JSON payload
-- [ ] `POST /sync/upload` valid batch → tickets PAID, wallets deducted, SYNCED
-- [ ] Same eventId twice → same ticketId, no duplicate (idempotency)
-- [ ] Overdraft scenario → PAID, balance negative
-- [ ] Exceeds overdraft → DISPUTED, wallet unchanged, no IdempotencyKey
-- [ ] Event older than maxSyncAgeDays → FAILED "Event too old"
-- [ ] Partial batch → each event independent, correct per-event status
-- [ ] `GET /sync/status` → correct counts per status
-- [ ] `GET /admin/analytics/disputed-tickets` → disputed tickets listed
-- [ ] Ticket expiry scheduler marks ISSUED > 24hr tickets as EXPIRED
-- [ ] SyncRetryScheduler retries FAILED only (never DISPUTED)
-- [ ] IdempotencyKeyCleanupScheduler deletes expired keys
-- [ ] All 9 `SyncEventProcessorTest` tests pass
-- [ ] All 27 Postman verification steps pass
+- [x] `IssueTicketResponseDTO` exposes all fields needed for ticket QR JSON payload
+- [x] `POST /sync/upload` valid batch → tickets PAID, wallets deducted, SYNCED
+- [x] Same eventId twice → same ticketId, no duplicate (idempotency)
+- [x] Overdraft scenario → PAID, balance negative
+- [x] Exceeds overdraft → DISPUTED, wallet unchanged, no IdempotencyKey
+- [x] Event older than maxSyncAgeDays → REJECTED "Event too old" (was FAILED; REJECTED added 2026-10-13)
+- [x] Partial batch → each event independent, correct per-event status
+- [x] `GET /sync/status` → correct counts per status
+- [x] `GET /admin/analytics/disputed-tickets` → disputed tickets listed
+- [x] Ticket expiry scheduler marks ISSUED > 24hr tickets as EXPIRED
+- [x] SyncRetryScheduler retries FAILED only (never DISPUTED or REJECTED), and stops after sync.max-retry-attempts
+- [x] IdempotencyKeyCleanupScheduler deletes expired keys
+- [x] All `SyncEventProcessorTest` tests pass (9 planned, 13 after 2026-10-13 additions)
+- [x] All 27 Postman verification steps pass
 - [ ] `feature/offline-sync` merged into `dev`, build clean

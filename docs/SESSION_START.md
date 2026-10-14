@@ -1,5 +1,25 @@
 # BusLink Session Startup
 
+## Working Style Reminder (added 2026-10-14)
+
+Every session follows the **Question-Led Development** style in `CLAUDE.md`
+(section "Working Style: Question-Led Development"). In short:
+
+```
+ explain simply (plain words + diagrams + real scenarios)
+   → ask ONE question at a time, leading me to the solution
+   → I make the design decision (you offer options + trade-offs)
+   → you write the syntax and explain each piece briefly
+   → compile / test step by step → record the decision in the sprint file
+```
+
+- Applies to new tasks, design problems, bug fixes and implementation alike.
+- On "Before Implementation" below: instead of presenting the full solution
+  for approval, walk me to it through questions, then confirm the file plan.
+- DB schema changes still need my explicit approval before running.
+- Worked example to model on: `docs/SYNC_RACE_CONDITIONS.md` (§15 Q&A
+  walkthrough, §16 implementation).
+
 ## Startup Checklist
 
 At the beginning of every new session, read these files in order:
