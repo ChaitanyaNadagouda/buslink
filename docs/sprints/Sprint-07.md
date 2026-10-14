@@ -708,7 +708,7 @@ Scheduler ONLY retries FAILED, never DISPUTED.
 
 ### Git
 
-- [ ] S7-23 — Commit and merge `feature/offline-sync` into `dev`
+- [x] S7-23 — Commit and merge `feature/offline-sync` into `dev`
 
 ---
 
@@ -1050,4 +1050,4 @@ validation chain → `insert transaction` / `insert ticket` →
 - [x] IdempotencyKeyCleanupScheduler deletes expired keys
 - [x] All `SyncEventProcessorTest` tests pass (9 planned, 13 after 2026-10-13 additions)
 - [x] All 27 Postman verification steps pass
-- [ ] `feature/offline-sync` merged into `dev`, build clean
+- [x] `feature/offline-sync` merged into `dev`, build clean (`--no-ff` merge `8beb5cc`, `./mvnw clean install` 106/106, 2026-10-14)

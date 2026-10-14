@@ -8,11 +8,41 @@ BusLink
 
 ## Current Sprint
 
-Sprint 7
+Sprint 7 — **closed 2026-10-14**. Sprint 8 not yet planned (awaiting the plan
+from Notion).
 
 ## Current Objective
 
-Sprint 7 is in progress. Building the offline sync engine: passenger QR
+Plan Sprint 8. Candidate scope already deferred to it by Sprint 7: OTP
+verification, `deviceId` registration check, outstanding-dues block, DISPUTED
+blacklist endpoint, README + architecture diagrams. Sprint 7 follow-ups worth
+considering: asymmetric (RS256/ES256) signing for the passenger QR so devices
+can verify offline without holding the HMAC secret; the `NoResourceFoundException`
+→ 500 gap (still open from Sprint 6).
+
+**Sprint 7 (closed 2026-10-14).** Offline sync engine, QR model and
+schedulers, all 27 Postman steps passing against a live app. What the sprint
+delivered, as it stands at close:
+- **Passenger QR = signed JWT** (24 h): `GET /user/qr` self-heals,
+  `POST /user/qr/refresh`; validated at sync **as of boarding time**
+  (`extractUserIdFromPassengerQrAt`, 5-min clock tolerance).
+- **`POST /tickets/scan`** (online confirm screen, owner-scoped 404);
+  `IssueTicketResponseDTO` gained `conductorId`.
+- **`POST /sync/upload` / `GET /sync/status`**: per-event transactions in a
+  separate `SyncEventProcessor`; outcomes **SYNCED / DISPUTED / REJECTED
+  (final)** and **FAILED (retryable, capped at 10)**; idempotent by
+  client `eventId`; **concurrency-safe** (row lock + `Persistable` real INSERT +
+  `saveAndFlush` + per-event try/catch that saves nothing). DISPUTED tickets
+  are self-paid via `POST /payments/wallet`.
+- **Schedulers:** FAILED retry (5 min), ticket expiry (ISSUED > 24 h →
+  EXPIRED), idempotency-key cleanup (daily).
+- `GET /admin/analytics/disputed-tickets`.
+- 106 tests. New docs: `docs/SYNC_RACE_CONDITIONS.md`,
+  `docs/OFFLINE_SYNC_DEMO_HANDBOOK.md`. `CLAUDE.md` now defines the
+  question-led working style for all future development.
+
+The original in-progress objective, kept for history:
+Building the offline sync engine: passenger QR
 upgraded to a signed JWT (`generatePassengerQrToken`/`validatePassengerQrToken`
 in `JwtUtil`, 24hr expiry, `POST /user/qr/refresh`), ticket QR stays an
 unsigned `ticketId` since the backend recalculates fare at sync time
@@ -103,6 +133,10 @@ property is dead config (custom cache-manager bean wins) — noted, not actioned
 - ✓ Redis caching (Sprint 6) — `redis` service in `docker-compose.yml`, `spring-boot-starter-data-redis`, `RedisConfig` (`RedisCacheManager`, 1h TTL, per-cache typed JSON serializers), `@Cacheable` on `getStopsForRoute`/`getFareRate`, `@CacheEvict` on `addStop`/`updateRoute`, new `FareRateDTO`, `calculateFare` → `self.getFareRate(...)` via `@Lazy` proxy
 - ✓ `AnalyticsServiceImplTest` (5), `JwtUtilTest` admin-token test, `FareServiceImplTest` reworked for `self`-proxy wiring — full suite 71 passing
 - ✓ Postman + `redis-cli` live verification (Sprint 6) — admin login/access-control, all 4 analytics endpoints with enriched data + 403 for non-admin, `route-stops` & `fare-calc` cache hits (readable JSON, TTL, no SQL on 2nd call), `@CacheEvict` on add-stop confirmed
+- ✓ Passenger QR as a signed JWT with self-heal + refresh; `POST /tickets/scan`; `conductorId` in the issue-ticket response (Sprint 7)
+- ✓ Offline sync engine: `POST /sync/upload`, `GET /sync/status`, SYNCED/DISPUTED/REJECTED/FAILED outcomes, idempotent by `eventId`, concurrency-safe (row lock + `Persistable` + `saveAndFlush` + per-event try/catch) (Sprint 7)
+- ✓ Schedulers: FAILED retry (capped), ticket expiry, idempotency-key cleanup; `GET /admin/analytics/disputed-tickets`; DISPUTED self-pay via `POST /payments/wallet` (Sprint 7)
+- ✓ 106 tests passing; S7-22 live verification, all 27 steps + SQL-log proof + scheduler checks (Sprint 7)
 
 ## Current Architecture
 
@@ -123,10 +157,26 @@ Docker Compose — `postgres`, `pgadmin`, and (Sprint 6) `redis` (`redis:7-alpin
 
 ## Next Planned Milestone
 
-Sprint 7 — not yet planned. Likely scope per `ARCHITECTURE.md`'s roadmap:
-offline-first sync, and/or the ticket-expiry scheduler (auto-expiring old unpaid
-tickets — explicitly deferred since Sprint 4). Awaiting the next sprint plan from
-Notion.
+Sprint 8 — not yet planned. Awaiting the next sprint plan from Notion (see
+Current Objective for the deferred scope).
+
+**Sprint 7 — closed (2026-10-14).** All Definition of Done items verified and
+checked. S7-22 run by the user in Postman Desktop against a live app, with
+command-line overrides only (SQL logging, short scheduler intervals): all 27
+steps pass, with five plan adjustments recorded in `Sprint-07.md` (₹36
+one-adult offline fare instead of ₹90; a wallet top-up before self-pay; admin
+disputed list checked before payment; REJECTED instead of FAILED for steps
+21–22; step 23 reusing step 3's ISSUED ticket). The SQL log proves the race
+fix (`… for no key update`, then a plain `insert into sync_event` before any
+validation). Scheduler checks with `psql` test rows: retry job retried a
+FAILED event and ignored one at the cap; key cleanup removed only the expired
+key; expiry flipped a backdated ticket within ~2 s. Found and fixed during the
+sprint (all recorded as approved deviations): DISPUTED tickets not self-payable;
+concurrent-duplicate races (duplicate DISPUTED tickets, double charge via
+`merge`, batch abort); leftover NOT NULL `sync_event` columns that would have
+failed every insert; QR expiry checked at sync time; endless retries of
+data errors. `feature/offline-sync` merged into `dev`, `./mvnw clean install`
+clean, 106/106.
 
 **Sprint 6 — closed (2026-09-06).** All Definition of Done items verified and
 checked. `admin` table + seeded `admin@buslink.com` confirmed via `psql` on the
@@ -241,4 +291,6 @@ with the rest of the auth flow as one coherent unit rather than a stub built twi
 - `/admin/**` still has no live authentication path as of Sprint 5 close (same gap noted at Sprint 3/4 close) — real admin auth remains Sprint 6 scope per `ARCHITECTURE.md`.
 - **Resolved in Sprint 6:** `/admin/**` now has a live auth path — `POST /admin/auth/login` mints a `ROLE_ADMIN` JWT off a seeded `Admin` entity, `JwtAuthenticationFilter` resolves the admin principal via `AdminDetailsServiceImpl`, and every pre-existing `/admin/**` endpoint (routes, buses, conductor-assign) is now reachable with an admin token. The gap first noted at Sprint 3 close is closed.
 - **Redis is cache-only** as of Sprint 6 — used purely through Spring's cache abstraction (`@Cacheable`/`@CacheEvict`), never as a `@RedisHash` repository store. Two cleanup items are noted but not actioned (see `Sprint-06.md` deviations 3 & 4): the `spring.cache.redis.time-to-live` property is ignored because a custom `RedisCacheManager` bean is defined, and `spring-boot-starter-data-redis` logs ~12 lines of Redis-repository-scan noise at startup (candidate fix: `spring.data.redis.repositories.enabled=false`).
+- **Resolved in Sprint 7:** the ticket-expiry scheduler (deferred since Sprint 4) exists. Unpaid `ISSUED` tickets older than 24 h become `EXPIRED`; `DISPUTED` tickets are deliberately excluded (they're a debt, not an abandoned ticket).
+- **Sprint 7 known limitations** (full list in `Sprint-07.md` and `docs/OFFLINE_SYNC_DEMO_HANDBOOK.md` §7): `PROCESSING` is never visible outside its transaction; schedulers would run on every instance if scaled out (ShedLock); a dishonest device could pick a time inside an old QR's 24 h window (`deviceId`, Sprint 8); the passenger QR is HMAC-signed, so on-device offline verification needs asymmetric keys.
 - The `NoResourceFoundException` → `500` gap (a mistyped URL matching no controller falls into `GlobalExceptionHandler`'s generic `Exception.class` bucket, same shape as Sprint 5's `MissingRequestHeaderException` bug) was found during Sprint 6 plan/verification but deferred as out of scope — see `Sprint-06.md`. Candidate fix: dedicated `@ExceptionHandler(NoResourceFoundException.class)` → `404`.

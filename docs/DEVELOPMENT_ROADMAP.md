@@ -7,7 +7,14 @@ Backend Foundation
 Sprint 7
 
 ## Sprint Status
-🚧 In progress (started 2026-09-17). Offline sync engine: passenger QR upgraded
+✅ **Complete (closed 2026-10-14).** All Definition of Done items verified;
+S7-22 Postman run 27/27 + SQL-log proof of the race-condition fix + scheduler
+checks; `feature/offline-sync` merged into `dev`, build clean, 106/106 tests.
+Beyond the plan: concurrency-safe idempotency (row lock + `Persistable`),
+`REJECTED` status + retry cap, QR validated as of boarding time. See
+`docs/sprints/Sprint-07.md`. Next: Sprint 8 plan from Notion.
+
+Original status (2026-09-17): 🚧 In progress. Offline sync engine: passenger QR upgraded
 to a signed JWT (24hr expiry, offline identity verification), ticket QR stays
 an unsigned `ticketId` (`POST /tickets/scan` for online payment), push
 notifications removed entirely in favor of the QR-scan model. Core of the

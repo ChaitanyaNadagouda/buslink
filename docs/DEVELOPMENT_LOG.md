@@ -704,3 +704,100 @@ Completed
   items verified and checked (pgAdmin visual check of the `admin` row
   deliberately skipped — `psql` is authoritative for row presence).
   `feature/admin-analytics-redis` merged into `dev`, build clean.
+
+# Sprint 7
+
+## QR Model & Enum Updates (S7-01..S7-08, committed `a3c9bb0`)
+
+Completed
+
+- Passenger QR upgraded from a plain UUID to a **signed JWT**
+  (`JwtUtil.generatePassengerQrToken`, `type=PASSENGER_QR`, 24 h).
+  `GET /user/qr` **self-heals** (regenerates on expired/tampered/missing), plus
+  `POST /user/qr/refresh`. `qr_token` column widened for the JWT.
+- `POST /tickets/scan` (ROLE_PASSENGER) for the online confirm screen, built in
+  `TicketController` (not `PassengerController`, whose `/passenger` prefix would
+  have produced the wrong URL).
+- `SyncStatus` gained `PROCESSING` + `DISPUTED`, `TicketStatus` gained
+  `DISPUTED`; both DB check constraints recreated via `psql` and proven with
+  rollback-wrapped INSERTs (same `ddl-auto` blind spot as Sprint 4).
+
+## Sync Engine (S7-09..S7-21)
+
+Completed
+
+- `SyncEvent` reshaped from Sprint 1's generic `entityType`/`entityId`/`payload`
+  to typed fields (needed so the retry job can rebuild a request);
+  `SyncEntityType` removed; `eventId` client-assigned.
+- `POST /sync/upload` + `GET /sync/status` (ROLE_CONDUCTOR). A
+  non-transactional batch loop (`SyncServiceImpl`) calls a separate
+  `SyncEventProcessor` bean with `@Transactional` per event (self-invocation
+  would bypass the proxy). Server-side fare (one adult); outcomes SYNCED /
+  DISPUTED / FAILED.
+- `SyncProperties`, `TicketExpiryProperties`; three schedulers
+  (`SyncRetryScheduler`, `TicketExpiryScheduler`, `IdempotencyKeyCleanupScheduler`);
+  `GET /admin/analytics/disputed-tickets`.
+- Fix during S7-22 prep (2026-10-10): `payViaWallet` only accepted `ISSUED`, so
+  DISPUTED tickets couldn't be self-paid as the finalized plan required.
+  Widened to `ISSUED || DISPUTED` + regression test.
+
+## Review, Race Conditions & Fixes (2026-10-11 to 2026-10-13)
+
+Completed, each decided question-by-question and recorded in `Sprint-07.md`
+as an approved deviation.
+
+- **`conductorId` added to `IssueTicketResponseDTO`** (ticket-QR payload gap).
+- **Race conditions.** The sprint note claiming concurrent duplicates "fail
+  cleanly" via `Wallet.@Version` was wrong: commit-time errors aborted the whole
+  batch; the DISPUTED path never writes the wallet (duplicate DISPUTED tickets
+  possible); new events went through `save()` → `merge` (overwrite, double
+  charge). Fixed with `findByIdForUpdate` (`SELECT … FOR UPDATE`), `SyncEvent
+  implements Persistable` (real INSERT, PK rejects duplicates), `saveAndFlush`
+  at the claim, and a per-event try/catch in the batch loop and retry job that
+  saves nothing on error. Full analysis + 14-question walkthrough:
+  `docs/SYNC_RACE_CONDITIONS.md`.
+- **Leftover `sync_event` columns** (`entity_id`, `entity_type`, `payload`,
+  all NOT NULL) would have failed every insert; `ddl-auto` never drops columns.
+  Dropped via `psql` in one transaction; `error_message` → TEXT (entity + DB).
+- **Passenger QR checked at sync time** rejected honest late syncs. Now
+  validated **as of boarding time** (`JwtUtil.extractUserIdFromPassengerQrAt`,
+  jjwt clock = `issuedAt`, 5-min skew tolerance) + a future-dated check.
+  Lower-bound (`iat ≤ issuedAt`) check dropped as over-engineering.
+- **Endless retries.** New final status `REJECTED` for data errors (never
+  retried, final on re-upload); `FAILED` only for technical errors, with a
+  `failedAttempts` cap (`sync.max-retry-attempts=10`). `rejected` count added to
+  both sync responses; DB check constraint updated.
+- Conflict log message made neutral (Spring maps duplicate key, NOT NULL and
+  CHECK violations to the same exception).
+- `CLAUDE.md` / `SESSION_START.md`: the question-led working style recorded as
+  the default for future development.
+- Full suite **106/106**.
+
+## Live Verification & Sprint Closure (S7-22..S7-23, 2026-10-14)
+
+Completed
+
+- S7-22 run by the user in Postman Desktop against a live app (command-line
+  overrides only: SQL logging, short scheduler intervals). **All 27 steps
+  pass**, with five plan adjustments recorded (₹36 one-adult fare, a wallet
+  top-up before self-pay, admin list checked before payment, REJECTED
+  expectations, step 23 reusing step 3's ticket).
+- **SQL-log proof** of the race fix: `… for no key update` on the lookup, then
+  a plain `insert into sync_event` with no merge-SELECT, before any validation.
+- Scheduler checks with `psql` test rows: retry job retried a FAILED event (→
+  REJECTED) and ignored one at the cap; key cleanup deleted only the expired
+  key; expiry job flipped a backdated ISSUED ticket to EXPIRED in ~2 s.
+- Bonus: Sprint 4's unchecked "newest first" passenger-ticket ordering
+  confirmed with 3+ tickets.
+- New `docs/OFFLINE_SYNC_DEMO_HANDBOOK.md` (interview demo script + revision).
+- `feature/offline-sync` merged into `dev` (`--no-ff`), `./mvnw clean install`
+  clean, 106/106.
+- **Sprint 7 declared complete (2026-10-14).** Every Definition of Done item
+  verified and checked.
+- Known limitations carried forward: `PROCESSING` never visible outside its
+  transaction; a race loser gets an error (then the winner's result on
+  re-upload); schedulers unsafe across instances (ShedLock); a dishonest
+  device can pick a time inside an old QR's 24 h window (`deviceId`, Sprint 8);
+  passenger QR is **HMAC**-signed, so true on-device offline verification
+  needs asymmetric keys (RS256/ES256); "Bus mismatch" uses the conductor's bus
+  at sync time.

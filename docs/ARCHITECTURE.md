@@ -116,6 +116,65 @@ Layered architecture is chosen over a more elaborate Clean/Hexagonal Architectur
 
 Redis is used **as a cache only** — never as a `@RedisHash` repository store. (`spring-boot-starter-data-redis` auto-enables Redis-repository scanning, which logs harmless "could not identify store" noise at startup; candidate fix `spring.data.redis.repositories.enabled=false`, noted not actioned.)
 
+### Offline sync engine (Sprint 7)
+
+**Problem:** buses lose network constantly. Conductors must sell tickets
+**offline**, and the money has to be settled **after the fact**, correctly,
+even when uploads are retried, duplicated or delayed by days.
+
+**Shape:**
+```
+ conductor phone (offline)                       server
+ ─────────────────────────                       ──────
+ sell ticket → event {eventId (client UUID),     POST /sync/upload
+   passengerQrToken, stops, issuedAt, …}   ───►    SyncServiceImpl  (batch loop, NOT transactional,
+ store locally until network returns                                 per-event try/catch)
+                                                    └► SyncEventProcessor (@Transactional per event)
+                                                         lock/claim → validate → server-side fare
+                                                         → SYNCED | DISPUTED | REJECTED | FAILED
+```
+
+**Key decisions** (full reasoning in `docs/sprints/Sprint-07.md` and
+`docs/SYNC_RACE_CONDITIONS.md`):
+- **Idempotency key = the client's `eventId`**, stored in a permanent
+  `sync_event` row. Final events (SYNCED/DISPUTED/REJECTED) return their
+  stored result on re-upload.
+- **One transaction per event**, in a separate bean (self-invocation would
+  bypass the proxy), so one event can't roll back another.
+- **Four outcomes:** SYNCED (paid), DISPUTED (wallet + ₹100 overdraft
+  insufficient; wallet untouched; passenger self-pays via the existing wallet
+  payment), REJECTED (invalid data; final), FAILED (technical; retried by a
+  scheduler, capped at 10 attempts). Transient and permanent errors are
+  deliberately separate statuses.
+- **Concurrency:** an existing event row is read with `SELECT … FOR UPDATE`,
+  so a concurrent duplicate waits and then sees the final status. A brand-new
+  event is claimed with a real INSERT (`SyncEvent implements Persistable`,
+  `saveAndFlush`), so the primary key rejects a concurrent duplicate before
+  any work. Commit-time errors are caught per event in the loop and **nothing
+  is saved** for the loser. Java `synchronized` was rejected (one JVM only,
+  and it releases before commit).
+- **Never trust the client's money values:** fare recalculated server-side.
+- **Time:** the passenger QR is validated **as of boarding time**, not upload
+  time (5-min clock-skew tolerance); events older than 7 days or dated in the
+  future are rejected.
+- **QR model:** the passenger QR is a signed JWT (identity checked offline);
+  the ticket QR is plain JSON (the server re-derives everything). Push
+  notifications were **removed** in favour of this QR-scan model, which gives
+  the same confirm-before-pay UX online and offline.
+
+**Background jobs** (`@Scheduled`, `fixedDelay`; `@EnableScheduling` on
+`SyncRetryScheduler`): FAILED retry (5 min), ticket expiry (unpaid ISSUED >
+24 h → EXPIRED, hourly), idempotency-key cleanup (daily). **Single-instance
+assumption:** with multiple instances every job would run on each. The planned
+fix is ShedLock (a DB lock per job).
+
+**Known architectural follow-ups:** the passenger QR is HMAC-signed with the
+server secret, so genuine **on-device** offline verification needs asymmetric
+signing (RS256/ES256, devices hold only the public key). Today the
+authoritative check is server-side at sync. Also: `deviceId` binding
+(Sprint 8), and versioned schema migrations (Flyway), since `ddl-auto=update`
+silently kept stale NOT NULL columns this sprint.
+
 ---
 
 ## Current Architecture Diagram
@@ -132,6 +191,8 @@ Redis is used **as a cache only** — never as a `@RedisHash` repository store. 
                        │   controller → service → repo      │
                        │   Spring Security + JWT filter     │
                        │   (3 principal types by role claim)│
+                       │   @Scheduled: sync retry, ticket   │
+                       │   expiry, idempotency-key cleanup  │
                        └───┬──────────────┬─────────────┬───┘
              cache (Redis) │              │ JDBC        │ HTTPS (SDK)
                            ▼              ▼             ▼
@@ -165,9 +226,10 @@ The following are anticipated additions, roughly in the order the domain require
 - **Ticketing** — the core domain: routes, trips, fares, ticket issuance and lifecycle (issued → validated → expired). **Update (2026-07-06):** the fare service will need the real stop topology of a route (an ordered sequence of stops, each at a known stage/position) to compute a fare between any two stops a conductor selects. `Route` (Sprint 1, S1-13) deliberately only stores `originStop`/`destinationStop` for now — no stop-sequence modeling exists yet. This is scoped to whenever the Fare Service sprint begins, not designed upfront. **Update (2026-07-26, Sprint 3):** the real stop topology landed — `RouteStop` (ordered `stopSequence` + fare-relevant `stageNumber` per stop), with `Route.originStop`/`destinationStop`/`totalStops` kept as denormalized fields updated wherever a stop is added (`createRoute`, `addStop`), not just read once at creation. `FareServiceImpl.calculateFare` computes `stagesCrossed`/`adultFare`/`childFare`/`totalFare` off this topology. Ticket issuance itself (consuming this fare calculation to actually create a `Ticket`) remains Sprint 4 scope — this sprint only built the fare *engine*, not the issuance flow that will call it. **Update (2026-07-30, Sprint 4):** ticket issuance landed — `POST /tickets/issue` (`ROLE_CONDUCTOR`) reuses `TicketServiceImpl`'s own fare calculation (duplicated from `FareServiceImpl`'s logic rather than calling it directly, since issuance needs the resolved `RouteStop`/`Route` entities mid-flow for its own validation chain, not just a fare number), validates the full conductor→bus→route→stops chain, and creates the `Ticket` in `ISSUED` status — idempotent via a client-supplied `X-Idempotency-Key` header, backed by a new `IdempotencyKey` entity/table (24-hour TTL, configurable via `ticket.idempotency.ttl-hours`). `PUT /tickets/{ticketId}/terminate` lets a conductor void an unpaid ticket (`TicketStatus.TERMINATED`, a new value distinct from `CANCELLED`). The ticket-expiry scheduler (auto-expiring old unpaid tickets) remains Sprint 7 scope — `terminate` is a manual conductor action, not automatic expiry.
 - **Payments** — integration with a payment gateway; will need idempotency handling so a network retry can't double-charge or double-issue a ticket. **Update (2026-07-06):** the `Payment` entity's shape was created early, in Sprint 1 (`docs/sprints/Sprint-01.md`, S1-31), once wallet top-up and direct non-wallet fare payment (UPI/card) both needed representing. Only the persistent shape exists — no gateway integration, webhook handling, or idempotency logic yet; that remains future work as described here. **Update (2026-07-30, Sprint 4):** wallet-based payment landed — `POST /payments/wallet` (`ROLE_PASSENGER`) debits `Wallet.balance` (optimistic-lock-protected via the `@Version` field added in Sprint 1, exercised in practice for the first time this sprint), allows going negative up to a configurable overdraft limit (`wallet.overdraft-limit`, default ₹100), records a `DEBIT` `Transaction`, and moves the `Ticket` to `PAID`. `Payment` (the external-gateway entity) is still untouched — this flow is wallet-only. Gateway integration (UPI/card), wallet recharge, and overdraft recovery-on-recharge all remain Sprint 5 scope. **Update (2026-08-23, Sprint 5):** real gateway integration landed — Razorpay (test mode), abstracted behind a `PaymentGatewayPort` interface (`gateway/` package) so `PaymentServiceImpl`/`WebhookServiceImpl` never depend on the Razorpay SDK directly; `RazorpayGatewayAdapter` (`gateway/impl/`) is the only class in the codebase that does. `POST /payments/recharge/initiate` and `POST /payments/ticket/upi/initiate` (both `ROLE_PASSENGER`) create a Razorpay order and a `PENDING` `Payment` row; the actual money movement only happens once a signed webhook (`POST /webhooks/razorpay`, `permitAll()` — Razorpay itself carries no JWT, security is the gateway port's HMAC signature check instead) confirms success or failure. On recharge success, overdraft is auto-recovered first (an explicit DEBIT `Transaction` reversing the negative balance, then a CREDIT for the full recharge — see `Sprint-05.md`'s "Pre-existing gaps found during plan review" for why both reuse `payment.getPaymentId()` as `referenceId`). On ticket-payment success, the `Ticket` moves straight to `PAID` with no wallet/`Transaction` involvement at all, since the money never touched the wallet.
   **Design lesson worth keeping in mind for any future gateway work:** a payment gateway's idempotency unit is often the individual *attempt*, not the logical *order* — Razorpay retries a declined checkout against the same order, sending a separate webhook per attempt. A live-verification pass in Sprint 5 (S5-21) caught the idempotency guard treating any non-`PENDING` `Payment` status as final, which silently dropped a real success webhook that arrived after an earlier attempt's failure webhook had already marked the row `FAILED`. Fixed by only treating `SUCCESS` as terminal. Full writeup in `Sprint-05.md`/`DEVELOPMENT_LOG.md`.
-- **QR validation** — generating a verifiable QR per ticket and a fast validation endpoint for bus-side scanning; likely the first candidate for extraction into its own service if load/latency demands independent scaling.
+- **QR validation** — generating a verifiable QR per ticket and a fast validation endpoint for bus-side scanning; likely the first candidate for extraction into its own service if load/latency demands independent scaling. **Update (2026-10-14, Sprint 7):** landed as a two-QR model rather than one validation endpoint. The **passenger QR** is a signed JWT (24 h, self-healing via `GET /user/qr`) that the conductor verifies offline and the server re-verifies at sync time as of boarding time. The **ticket QR** is plain JSON from the conductor app, confirmed online via `POST /tickets/scan`. See "Offline sync engine (Sprint 7)" above.
+- **Offline sync** — **Update (2026-10-14, Sprint 7):** landed. See the "Offline sync engine (Sprint 7)" section above. The ticket-expiry scheduler deferred since Sprint 4 landed with it.
 - **Analytics** — reporting on ridership, revenue, and route usage; likely read-heavy and may eventually warrant a read replica or separate reporting store rather than querying the transactional database directly. **Update (2026-09-06, Sprint 6):** a first cut landed — 4 `GET /admin/analytics/*` endpoints (`revenue-by-route`, `tickets-per-day`, `top-routes`, `conductor-activity`) backed by JPQL aggregate `@Query` methods on `TicketRepository` (`Object[]` projections), querying the transactional `ticket` table directly. No pagination, no date filters, N+1 route/conductor-name enrichment in the service layer — all acceptable for an infrequently-hit single-admin endpoint. A separate reporting store / read replica stays on this roadmap for when analytics grows beyond a handful of full-table aggregates.
-- **Notifications** — ticket confirmations, trip reminders; async by nature (likely a message queue rather than synchronous calls from the ticketing flow).
+- **Notifications** — ticket confirmations, trip reminders; async by nature (likely a message queue rather than synchronous calls from the ticketing flow). **Update (2026-10-14, Sprint 7):** push notifications were **removed** from the ticket-payment flow entirely, replaced by the QR-scan confirm model (one consistent flow online and offline, no FCM or notification permissions needed). Notifications may still return for non-critical uses (trip reminders).
 - **Admin Portal** — internal-facing UI/APIs for managing routes, fares, and viewing analytics; distinct auth/authorization needs from the rider-facing API. **Update (2026-09-06, Sprint 6):** the *API* side is now functional — admin auth + all `/admin/**` route/bus/conductor endpoints + `/admin/analytics`. Passenger management endpoints were explicitly dropped from Sprint 6 as low-value. A UI is still future (bundled with the React frontend).
 - **Future React frontend** — a rider-facing web client built once the API contract is stable enough to build against without constant breakage.
 - **Future deployment architecture** — moving from local Docker Compose to a real deployment target (e.g., a single VM with Compose as a first step, then likely a managed container platform or Kubernetes if/when multiple services exist).
