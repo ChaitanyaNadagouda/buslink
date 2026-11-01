@@ -26,7 +26,7 @@ public class SecurityConfig {
                 .exceptionHandling(ex -> ex.authenticationEntryPoint(jwtAuthenticationEntryPoint)
                         .accessDeniedHandler(jwtAccessDeniedHandler))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(HttpMethod.POST, "/auth/register", "/auth/login", "/auth/refresh")
+                        .requestMatchers(HttpMethod.POST, "/auth/otp/send", "/auth/register", "/auth/login", "/auth/refresh")
                         .permitAll()
                         .requestMatchers(HttpMethod.POST, "/conductor/auth/login")
                         .permitAll()

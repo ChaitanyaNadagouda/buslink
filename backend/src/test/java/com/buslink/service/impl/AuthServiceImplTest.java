@@ -3,8 +3,12 @@ package com.buslink.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.buslink.dto.request.UserLoginRequestDTO;
@@ -19,12 +23,14 @@ import com.buslink.exception.ValidationException;
 import com.buslink.repository.UserRepository;
 import com.buslink.repository.WalletRepository;
 import com.buslink.security.JwtUtil;
+import com.buslink.service.OtpService;
 import java.math.BigDecimal;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -45,13 +51,16 @@ class AuthServiceImplTest {
     @Mock
     private JwtUtil jwtUtil;
 
+    @Mock
+    private OtpService otpService;
+
     @InjectMocks
     private AuthServiceImpl authService;
 
     @Test
     void register_success() {
         UserSignUpRequestDTO request =
-                new UserSignUpRequestDTO("Rider One", "rider1@buslink.com", "9876543210", "password123");
+                new UserSignUpRequestDTO("Rider One", "rider1@buslink.com", "9876543210", "password123", "482913");
         UUID generatedUserId = UUID.randomUUID();
 
         when(userRepository.findByEmail(request.email())).thenReturn(Optional.empty());
@@ -83,17 +92,54 @@ class AuthServiceImplTest {
         assertThat(response.name()).isEqualTo(request.name());
         assertThat(response.accessToken()).isEqualTo("access-token");
         assertThat(response.refreshToken()).isEqualTo("refresh-token");
+
+        InOrder inOrder = inOrder(otpService, userRepository);
+        inOrder.verify(otpService).verifyOtp(request.mobileNo(), request.otp());
+        inOrder.verify(userRepository, times(2)).save(any(User.class));
+        inOrder.verify(otpService).clearOtp(request.mobileNo());
     }
 
     @Test
     void register_duplicateEmail() {
         UserSignUpRequestDTO request =
-                new UserSignUpRequestDTO("Rider One", "rider1@buslink.com", "9876543210", "password123");
+                new UserSignUpRequestDTO("Rider One", "rider1@buslink.com", "9876543210", "password123", "482913");
         User existing = User.builder().email(request.email()).build();
 
         when(userRepository.findByEmail(request.email())).thenReturn(Optional.of(existing));
 
         assertThatThrownBy(() -> authService.register(request)).isInstanceOf(ConflictException.class);
+        verifyNoInteractions(otpService);
+    }
+
+    @Test
+    void register_duplicateMobileNo() {
+        UserSignUpRequestDTO request =
+                new UserSignUpRequestDTO("Rider Two", "rider2@buslink.com", "9876543210", "password123", "482913");
+
+        when(userRepository.findByEmail(request.email())).thenReturn(Optional.empty());
+        when(userRepository.existsByMobileNo(request.mobileNo())).thenReturn(true);
+
+        assertThatThrownBy(() -> authService.register(request))
+                .isInstanceOf(ConflictException.class)
+                .hasMessage("Mobile number already registered");
+        verify(userRepository, never()).save(any(User.class));
+        verifyNoInteractions(otpService);
+    }
+
+    @Test
+    void register_wrongOtp_400AndNothingSaved() {
+        UserSignUpRequestDTO request =
+                new UserSignUpRequestDTO("Rider Three", "rider3@buslink.com", "9876543211", "password123", "000000");
+
+        when(userRepository.findByEmail(request.email())).thenReturn(Optional.empty());
+        doThrow(new ValidationException("Invalid OTP")).when(otpService).verifyOtp(request.mobileNo(), request.otp());
+
+        assertThatThrownBy(() -> authService.register(request))
+                .isInstanceOf(ValidationException.class)
+                .hasMessage("Invalid OTP");
+        verify(userRepository, never()).save(any(User.class));
+        verify(walletRepository, never()).save(any(Wallet.class));
+        verify(otpService, never()).clearOtp(request.mobileNo());
     }
 
     @Test

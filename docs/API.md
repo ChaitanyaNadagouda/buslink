@@ -75,6 +75,43 @@ Status code -> condition (e.g., 404 -> route not found, 409 -> duplicate booking
 
 ## Authentication
 
+### POST /auth/otp/send
+
+**Purpose** (Sprint 8)
+Send a 6-digit signup OTP to a mobile number. The OTP is stored in Redis for 5
+minutes and must be submitted with `POST /auth/register`. On the `dev` profile
+the SMS is mocked: the OTP is printed in the app log (`[MOCK SMS] OTP for …`).
+
+**Authentication Requirement**
+None (public).
+
+**Request**
+```json
+{ "mobileNo": "9876543210" }
+```
+
+**Validation Rules**
+- `mobileNo` — required, 10-digit Indian mobile number (`^[6-9]\d{9}$`)
+
+**Response** — `200 OK`
+```json
+{ "success": true, "message": "OTP sent", "data": null }
+```
+
+**Error Codes**
+| Status | Condition |
+|---|---|
+| 400 | `@Valid` failure on `mobileNo` |
+| 409 | Mobile number already registered (no SMS sent) |
+| 429 | Within 60 s of the previous send to this number — "Please wait before requesting another OTP" |
+| 429 | More than 5 sends to this number in the current hour — "Too many OTP requests. Try again later" |
+
+**Notes**
+- A new send replaces the previous OTP and resets its wrong-attempt counter.
+- Limits are per number (see `docs/OTP_VERIFICATION.md`).
+
+---
+
 ### POST /auth/register
 
 **Purpose**
@@ -91,7 +128,8 @@ None (public).
   "name": "Test Rider",
   "email": "rider1@example.com",
   "mobileNo": "9876543210",
-  "password": "password123"
+  "password": "password123",
+  "otp": "482913"
 }
 ```
 
@@ -100,6 +138,7 @@ None (public).
 - `email` — required, must be a valid email address
 - `mobileNo` — required, 10-digit Indian mobile number (`^[6-9]\d{9}$`), not E.164
 - `password` — required, minimum 8 characters
+- `otp` — required, 6 digits; the code sent by `POST /auth/otp/send` to this `mobileNo` (Sprint 8)
 
 **Response** — `200 OK`
 ```json
@@ -124,6 +163,13 @@ creation" convention doesn't fit.
 |---|---|
 | 400 | `@Valid` failure on any field (field-level messages in `data`) |
 | 409 | Email already registered |
+| 409 | Mobile number already registered (Sprint 8 pre-check; the `mobile_no` UNIQUE constraint still backs it) |
+| 400 | "OTP expired or not requested" — no live OTP for this `mobileNo` |
+| 400 | "Invalid OTP" — wrong code (counts as an attempt) |
+| 400 | "Too many wrong attempts. Request a new OTP" — 5th wrong code; the OTP is deleted |
+
+Check order: email → mobile → OTP, so a 409 never uses up an OTP attempt. On
+success the OTP is deleted (single use).
 
 ---
 

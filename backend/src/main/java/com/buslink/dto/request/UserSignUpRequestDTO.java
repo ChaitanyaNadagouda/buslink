@@ -10,4 +10,6 @@ public record UserSignUpRequestDTO(
         @NotBlank @Email String email,
         @NotBlank @Pattern(regexp = "^[6-9]\\d{9}$", message = "mobileNo must be a valid 10-digit Indian mobile number")
                 String mobileNo,
-        @NotBlank @Size(min = 8) String password) {}
+        @NotBlank @Size(min = 8) String password,
+        // Sprint 8 (D5): OTP from POST /auth/otp/send, checked in the same request.
+        @NotBlank @Pattern(regexp = "^\\d{6}$", message = "otp must be 6 digits") String otp) {}

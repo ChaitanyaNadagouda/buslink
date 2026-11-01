@@ -11,5 +11,7 @@ public interface UserRepository extends JpaRepository<User, UUID> {
 
     Optional<User> findByEmail(String email);
 
+    boolean existsByMobileNo(String mobileNo);
+
     Optional<User> findByQrToken(String qrToken);
 }

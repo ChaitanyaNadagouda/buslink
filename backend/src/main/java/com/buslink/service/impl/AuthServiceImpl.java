@@ -14,6 +14,7 @@ import com.buslink.repository.UserRepository;
 import com.buslink.repository.WalletRepository;
 import com.buslink.security.JwtUtil;
 import com.buslink.service.AuthService;
+import com.buslink.service.OtpService;
 import java.math.BigDecimal;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -28,6 +29,7 @@ public class AuthServiceImpl implements AuthService {
     private final WalletRepository walletRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
+    private final OtpService otpService;
 
     @Override
     @Transactional
@@ -35,6 +37,12 @@ public class AuthServiceImpl implements AuthService {
         userRepository.findByEmail(request.email()).ifPresent(existing -> {
             throw new ConflictException("Email already registered: '" + request.email() + "'");
         });
+        // Clear message only; the UNIQUE constraint on mobile_no still guards concurrent signups.
+        if (userRepository.existsByMobileNo(request.mobileNo())) {
+            throw new ConflictException("Mobile number already registered");
+        }
+        // After the email/mobile checks, so a form error never burns an OTP attempt (D5).
+        otpService.verifyOtp(request.mobileNo(), request.otp());
 
         User user = User.builder()
                 .name(request.name())
@@ -54,6 +62,10 @@ public class AuthServiceImpl implements AuthService {
                 .status(WalletStatus.ACTIVE)
                 .build();
         walletRepository.save(wallet);
+
+        // Redis isn't part of the DB transaction: if the commit fails after this, the user just
+        // requests a new OTP (D11, accepted).
+        otpService.clearOtp(request.mobileNo());
 
         String accessToken = jwtUtil.generateAccessToken(user);
         String refreshToken = jwtUtil.generateRefreshToken(user);

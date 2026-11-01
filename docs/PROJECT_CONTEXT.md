@@ -8,17 +8,25 @@ BusLink
 
 ## Current Sprint
 
-Sprint 7 — **closed 2026-10-14**. Sprint 8 not yet planned (awaiting the plan
-from Notion).
+Sprint 8 — **in progress (started 2026-11-01)**, branch
+`feature/security-hardening`. Plan: `docs/sprints/Sprint-08.md`.
+
+**Where we left off (2026-11-01):** Phase 1 done — OTP-verified signup
+(`POST /auth/otp/send`, Redis-backed OTP with TTL, attempt + send limits,
+`otp` required in `POST /auth/register`), Spring profiles `dev`/`prod`
+(`MockSmsProvider` on dev). Next: **Step 5 (S8-09, deviceId)** — open
+**Question 12** (JWT claim vs `User.deviceId` vs both); options and
+recommendation in the sprint file's "Progress & Where We Left Off" section.
+Learning note: `docs/OTP_VERIFICATION.md`.
 
 ## Current Objective
 
-Plan Sprint 8. Candidate scope already deferred to it by Sprint 7: OTP
-verification, `deviceId` registration check, outstanding-dues block, DISPUTED
-blacklist endpoint, README + architecture diagrams. Sprint 7 follow-ups worth
-considering: asymmetric (RS256/ES256) signing for the passenger QR so devices
-can verify offline without holding the HMAC secret; the `NoResourceFoundException`
-→ 500 gap (still open from Sprint 6).
+Harden the passenger side against fare evasion opened up by offline sync:
+OTP-verified phone at registration, `deviceId` in the auth flow, a
+`DeviceBlacklist` written on DISPUTED sync outcomes, a dues + blacklist gate
+on `GET /user/qr` (402), and `GET /admin/analytics/blacklisted-devices`.
+Still open from earlier sprints: asymmetric (RS256/ES256) passenger-QR
+signing; the `NoResourceFoundException` → 500 gap (Sprint 6).
 
 **Sprint 7 (closed 2026-10-14).** Offline sync engine, QR model and
 schedulers, all 27 Postman steps passing against a live app. What the sprint

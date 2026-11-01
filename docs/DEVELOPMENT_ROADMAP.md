@@ -4,28 +4,21 @@
 Backend Foundation
 
 ## Active Sprint
-Sprint 7
+Sprint 8
 
 ## Sprint Status
-✅ **Complete (closed 2026-10-14).** All Definition of Done items verified;
-S7-22 Postman run 27/27 + SQL-log proof of the race-condition fix + scheduler
-checks; `feature/offline-sync` merged into `dev`, build clean, 106/106 tests.
-Beyond the plan: concurrency-safe idempotency (row lock + `Persistable`),
-`REJECTED` status + retry cap, QR validated as of boarding time. See
-`docs/sprints/Sprint-07.md`. Next: Sprint 8 plan from Notion.
+🚧 **In progress (started 2026-11-01).** Security hardening against fare
+evasion from the offline sync model: OTP-verified phone at registration,
+`deviceId` across auth flows, a `DeviceBlacklist` written on DISPUTED sync
+outcomes, a dues + blacklist gate on the passenger QR, and an admin
+blacklisted-devices view. Branch `feature/security-hardening`. See
+`docs/sprints/Sprint-08.md`.
 
-Original status (2026-09-17): 🚧 In progress. Offline sync engine: passenger QR upgraded
-to a signed JWT (24hr expiry, offline identity verification), ticket QR stays
-an unsigned `ticketId` (`POST /tickets/scan` for online payment), push
-notifications removed entirely in favor of the QR-scan model. Core of the
-sprint is `POST /sync/upload` — idempotent, per-event-`@Transactional` batch
-reconciliation of offline ticket events with three-outcome resolution
-(SYNCED/DISPUTED/FAILED), plus `GET /sync/status` and three schedulers (FAILED
-retry, ticket expiry, idempotency-key cleanup). See
-`docs/sprints/Sprint-07.md` for full scope, task list, and Definition of Done.
+Sprint 7: ✅ closed 2026-10-14 (offline sync engine, QR model, schedulers;
+106/106 tests). See `docs/sprints/Sprint-07.md`.
 
 ## Active Sprint File
-docs/sprints/Sprint-07.md
+docs/sprints/Sprint-08.md
 
 ---
 
